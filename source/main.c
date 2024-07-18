@@ -69,9 +69,9 @@ static void cprintf(const char* cp_stp, ...)
             printf("\033[1;35m~\033[0m");
         else if (cp_stp[c] == '!')
             printf("\033[1;31m!\033[0m");
-        else if (cp_stp[c] == 'R') {
+        else if (cp_stp[c] == '=') {
             if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[0;32mR\033[0m");
+                printf("\033[1;35m=\033[0m");
             else
                 putchar('R');
         } else if (cp_stp[c] == '%') {
@@ -198,9 +198,9 @@ static void* crawl_text(void) {
     stext_t found_text = find_text();
 
     // debug
-    printf("[=] %p\n", found_text.start_a);
-    printf("[=] %p\n", found_text.base_a);
-    printf("[=] 0x%lx\n", found_text.size);
+    cprintf("[=] %p\n"   , found_text.start_a);
+    cprintf("[=] %p\n"   , found_text.base_a);
+    cprintf("[=] 0x%lx\n", found_text.size);
 
     if (found_text.start_a == NULL || found_text.base_a == NULL || found_text.size == (size_t)0x0)
         return NULL;
