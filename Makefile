@@ -9,3 +9,6 @@ clean:
 
 run: $(MAIN_OUTPUT)
 	./$(MAIN_OUTPUT)
+
+dbg: $(MAIN_OUTPUT)
+	gdb $(MAIN_OUTPUT)
