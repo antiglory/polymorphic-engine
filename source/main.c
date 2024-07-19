@@ -38,6 +38,7 @@
 
 // typedefs
 typedef unsigned char byte_t;
+typedef signed   char ssbyte_t;
 typedef unsigned long ulong64_t;
 
 typedef struct {
@@ -133,12 +134,10 @@ static uintptr_t ft_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_si
 
 static uintptr_t gt_base_a(uintptr_t start_a)
 {
-    uintptr_t base_a = 0x0;
-
     FILE* maps;
 
-    byte_t dir[64];
-    byte_t line[512];
+    ssbyte_t dir[64];
+    ssbyte_t line[512];
 
     snprintf(dir, sizeof(dir), "/proc/%d/maps", pid);
     maps = fopen(dir, "r");
@@ -146,24 +145,24 @@ static uintptr_t gt_base_a(uintptr_t start_a)
     if (maps == NULL)
         return 0x0;
 
-    while (fgets(line, sizeof(line), maps)) {
-        // (_m: mapping/mappings)
-        // base/end are the same
+    uintptr_t base_a = 0x0;
 
+    while (fgets(line, sizeof(line), maps)) {
         uintptr_t m_start_a, m_end_a;
-        byte_t m_perms[5];
+        ssbyte_t m_perms[5];
 
         if (sscanf(line, "%lx-%lx %4s", &m_start_a, &m_end_a, m_perms) != 3)
             continue;
 
         if (strchr(m_perms, 'x') && start_a >= m_start_a && start_a < m_end_a) {
-            base_a = m_start_a;
+            base_a = m_end_a;
             break;
         }
     }
 
     fclose(maps);
-    return base_a;
+
+    return base_a; 
 }
 
 static stext_t find_text(void)
@@ -175,23 +174,15 @@ static stext_t find_text(void)
     if ((void*)start_a && (uintptr_t)start_a != NULL)
         section.start_a = (uintptr_t)start_a;
 
-    uintptr_t   base_a  = (uintptr_t)gt_base_a(start_a);
+    uintptr_t base_a = (uintptr_t)gt_base_a(start_a);
 
     if ((uintptr_t)base_a)
-        section.base_a  = (uintptr_t)base_a;
+        section.base_a = (uintptr_t)base_a;
 
     if (start_a && base_a && start_a < base_a)
         section.size = base_a - start_a;
 
     return section;
-
-    /*
-        TODO corrigir essa porra quando o claude voltar
-        ~ gcc -g -o main -ldl -fno-stack-protector -z execstack -no-pie -w main.c && ./main
-        [=] 0x401000
-        [=] 0x401000
-        [=] 0x0
-                    */
 }
 
 static void* crawl_text(void) {
