@@ -1,22 +1,24 @@
 /* schema:
     ~ antes de tudo, se certificar e assegurar que tem mais ou menos 60 bytes de espaço reservado (zerofilled) no final da .text
     -> cprintf | um "wrapper" pro printf mas acrescenta umas cores diferente se indentificar o caractere ([!] vermelho, [~] roxo, [*] amarelo, [+] ciano, etc)
-    -> ft_gt_start_a_callback | helper da find_text pra pegar o start address da section onde tá a 'main'
+    -> ft_gt_start_a_callback | helper da find_text pra pegar o start address da section que a 'main' pertence (pra facilitar)
     -> gt_base_a | helper da find_text pra pegar o base address correspondete ao start_address q a 'ft_gt_start_a_callback' retornar
-    -> find_text | vai retornar as informações necessárias pra section que a gente vai modificar (as informações tão descritas na struct 'stext_t')
+    -> find_text | vai retornar as informações necessárias pra section que a gente vai modificar (as informações tão descritas na struct 'section_t')
     -> crawl_text | copia a .text que a 'find_text' achou pra uma section mapeada na memória ou simplesmente uma chunk RWX na heap
-    -> inject | jumpa pra essa .text que foi mapeada (precisa jumpar pra um lugar correspondente, n pode ser random)
-    -> inject | escreve na .text original (no binário) adicionando algum código naquele espaço reservado nela (seja uns NOP ou algum código funcional de fato)
-    -> singnature_check | faz um check na static signature do binário pra ver se deu tudo certo, e ve se corrompeu algo, se der certo, libera a .text mapeada
-    -> crawled_jmp | se deu certo, jumpa de volta pra .text original modificada de forma que nao trunque a execução tb
+    -> sc_virtual | faz um sanity check pra ver se todos os opcodes da section original são os mesmos opcodes da section mapeada
+    -> modifier | finalmente modifica a nova .text e depois faz alguns sanity checks e faz o writeback pro binario no disco
 */
 
 /* abbreviations
 - _a: address
 - _s: section
 - _t: type
+- f_: found
+
 - ft: find_text
+- sc: sanity check
 - gt: get
+- og: original
 */
 
 #define _GNU_SOURCE
@@ -38,14 +40,14 @@
 
 // typedefs
 typedef unsigned char byte_t;
-typedef signed   char ssbyte_t;
+typedef signed   char sbyte_t;
 typedef unsigned long ulong64_t;
 
 typedef struct {
     void*   start_a;
     void*   base_a;
     size_t* size;
-} stext_t;
+} section_t;
 
 // protytpes
 // eu ainda vou fazer essas funções, mas o foco agora é ter certeza que deu pra copiar a .text certa/especifica pra section mapeada
@@ -54,7 +56,8 @@ static void  crawled_jmp(void); // TODO
        int   main(void);
 
 // global vars
-pid_t pid = 0x0;
+static pid_t     pid     = 0x0;
+static section_t found_s = {0x0, 0x0, 0x0};
 
 static void cprintf(const char* cp_stp, ...)
 {
@@ -136,8 +139,8 @@ static uintptr_t gt_base_a(uintptr_t start_a)
 {
     FILE* maps;
 
-    ssbyte_t dir[64];
-    ssbyte_t line[512];
+    sbyte_t dir[64];
+    sbyte_t line[512];
 
     snprintf(dir, sizeof(dir), "/proc/%d/maps", pid);
     maps = fopen(dir, "r");
@@ -148,8 +151,10 @@ static uintptr_t gt_base_a(uintptr_t start_a)
     uintptr_t base_a = 0x0;
 
     while (fgets(line, sizeof(line), maps)) {
-        uintptr_t m_start_a, m_end_a;
-        ssbyte_t m_perms[5];
+        // m_: mapping/mappings
+        uintptr_t m_start_a = 0x0;
+        uintptr_t m_end_a   = 0x0;
+        sbyte_t   m_perms[5];
 
         if (sscanf(line, "%lx-%lx %4s", &m_start_a, &m_end_a, m_perms) != 3)
             continue;
@@ -165,63 +170,96 @@ static uintptr_t gt_base_a(uintptr_t start_a)
     return base_a; 
 }
 
-static stext_t find_text(void)
+static section_t find_text(void)
 {
-    stext_t section = {0x0, 0x0, 0x0};
+    section_t section = {0x0, 0x0, 0x0};
 
-    uintptr_t start_a = dl_iterate_phdr(ft_gt_start_a_callback, NULL);
+    uintptr_t f_start_a = dl_iterate_phdr(ft_gt_start_a_callback, NULL);
 
-    if ((void*)start_a && (uintptr_t)start_a != NULL)
-        section.start_a = (uintptr_t)start_a;
+    if ((void*)f_start_a && (uintptr_t)f_start_a != NULL)
+        section.start_a = (uintptr_t)f_start_a;
 
-    uintptr_t base_a = (uintptr_t)gt_base_a(start_a);
+    uintptr_t f_base_a = (uintptr_t)gt_base_a(f_start_a);
 
-    if ((uintptr_t)base_a)
-        section.base_a = (uintptr_t)base_a;
+    if ((uintptr_t)f_base_a)
+        section.base_a = (uintptr_t)f_base_a;
 
-    if (start_a && base_a && start_a < base_a)
-        section.size = base_a - start_a;
+    if (f_start_a && f_base_a && f_start_a < f_base_a)
+        section.size = f_base_a - f_start_a;
 
     return section;
 }
 
 static void* crawl_text(void) {
-    stext_t found_text = find_text();
+    found_s = find_text();
 
     // debug
-    cprintf("[=] %p\n"   , found_text.start_a);
-    cprintf("[=] %p\n"   , found_text.base_a);
-    cprintf("[=] 0x%lx\n", found_text.size);
+    cprintf("[=] %p\n"   , found_s.start_a);
+    cprintf("[=] %p\n"   , found_s.base_a);
+    cprintf("[=] 0x%lx\n", found_s.size);
 
-    if (found_text.start_a == NULL || found_text.base_a == NULL || found_text.size == (size_t)0x0)
+    if (!found_s.start_a || !found_s.base_a || found_s.size == (size_t)0x0)
         return NULL;
 
-    uintptr_t* mapped_s = (uintptr_t*)malloc(((int64_t)found_text.size) * sizeof(byte_t));
+    void* mapped_s = (uintptr_t*)mmap(
+        NULL, found_s.size,
+        PROT_READ   | PROT_WRITE | PROT_EXEC,
+        MAP_PRIVATE | MAP_ANONYMOUS, 
+        -1,
+        0
+    );
 
-    if (!mapped_s)
+    if (mapped_s == MAP_FAILED)
         return NULL;
 
-    if (mprotect(mapped_s, found_text.size, PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
-        free(mapped_s);
-        return NULL;
-    }
-
-    memcpy(mapped_s, found_text.start_a, found_text.size);
+    memcpy(mapped_s, found_s.start_a, found_s.size);
 
     return mapped_s;
 }
 
 // TODO
-static void inject(void) 
+static void sc_physical(void)
+{
+
+}
+
+// TODO
+static void wt_back(void)
+{
+
+}
+
+static int32_t sc_virtual(byte_t* section, section_t og_section)
+{
+    for (int i = 0; i < og_section.size; i++) {
+        if (section[i] == ((byte_t*)og_section.start_a)[i]) continue;
+        else return 1;
+    }
+
+    return 0;
+}
+
+static void modifier(void) 
 { 
-    crawl_text(); 
+    byte_t* mapped_s = (byte_t*)crawl_text();
+
+    if (sc_virtual(mapped_s, found_s) == 0x1)
+        return NULL;
+
+    byte_t* cursor = mapped_s + ((int64_t)found_s.size - (sbyte_t)9); // 9 and not 8 because the last byte is inaccessible
+    
+    for (int i = 0; i < found_s.size; i++) {
+        cursor[i] == 0x90; // 8 NOPs
+    }
+
+    wt_back();
 }
 
 int main(void)
 {
     pid = getpid();
 
-    inject();
+    modifier();
 
     return 0;
 }
