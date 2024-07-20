@@ -45,7 +45,7 @@ static uintptr_t fcv_gt_base_a(uintptr_t start_a)
     uintptr_t base_a = 0x0;
 
     while (fgets(line, sizeof(line), maps)) {
-        // m_: mapping/mappings
+        // m_: mapping
 
         uintptr_t m_start_a = 0x0;
         uintptr_t m_end_a   = 0x0;
