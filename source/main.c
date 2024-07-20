@@ -1,24 +1,25 @@
-/* schema:
-    ~ antes de tudo, se certificar e assegurar que tem mais ou menos 60 bytes de espaço reservado (zerofilled) no final da .text
-    -> cprintf | um "wrapper" pro printf mas acrescenta umas cores diferente se indentificar o caractere ([!] vermelho, [~] roxo, [*] amarelo, [+] ciano, etc)
-    -> ft_gt_start_a_callback | helper da find_text pra pegar o start address da section que a 'main' pertence (pra facilitar)
-    -> gt_base_a | helper da find_text pra pegar o base address correspondete ao start_address q a 'ft_gt_start_a_callback' retornar
-    -> find_text | vai retornar as informações necessárias pra section que a gente vai modificar (as informações tão descritas na struct 'section_t')
-    -> crawl_text | copia a .text que a 'find_text' achou pra uma section mapeada na memória ou simplesmente uma chunk RWX na heap
-    -> sc_virtual | faz um sanity check pra ver se todos os opcodes da section original são os mesmos opcodes da section mapeada
-    -> modifier | finalmente modifica a nova .text e depois faz alguns sanity checks e faz o writeback pro binario no disco
-*/
-
 /* abbreviations
 - _a: address
 - _s: section
 - _t: type
 - f_: found
 
-- ft: find_text
+- fc_virtual: find code virtual
+- fs_virtual: found section virtual
+
+- fs_physical: found section physical
+
+- cc_virtual: crawl code virtual
+
+- vt: virtual
+- ps: phisical
+
+- fcv: find code virtual (ABV of helpers)
+
 - sc: sanity check
+- mk: mask
 - gt: get
-- og: original
+- wt: write
 */
 
 #define _GNU_SOURCE
@@ -29,6 +30,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 
+#include <limits.h>
 #include <inttypes.h>
 
 #include <sys/mman.h>
@@ -44,20 +46,19 @@ typedef signed   char sbyte_t;
 typedef unsigned long ulong64_t;
 
 typedef struct {
-    void*   start_a;
-    void*   base_a;
-    size_t* size;
+    void*    start_a;
+    void*    base_a;
+    size_t*  size;
+    size_t*  size_mk;
 } section_t;
 
 // protytpes
-// eu ainda vou fazer essas funções, mas o foco agora é ter certeza que deu pra copiar a .text certa/especifica pra section mapeada
-static void  signature_check(void); // TODO
-static void  crawled_jmp(void); // TODO
-       int   main(void);
+int main(void);
 
 // global vars
-static pid_t     pid     = 0x0;
-static section_t found_s = {0x0, 0x0, 0x0};
+static pid_t      pid          = 0x0;
+static section_t  fs_virtual   = {0x0, 0x0, 0x0};
+static void*      mapped_s     = NULL;
 
 static void cprintf(const char* cp_stp, ...)
 {
@@ -66,20 +67,44 @@ static void cprintf(const char* cp_stp, ...)
     
     for (int c = 0; cp_stp[c] != '\0'; c++) {
         if (cp_stp[c] == '*')
-            printf("\033[1;33m*\033[0m");
+            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
+                printf("\033[1;33m*\033[0m");
+            else
+                putchar('*');
         else if (cp_stp[c] == '+')
-            printf("\033[1;36m+\033[0m");
+            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
+                printf("\033[1;36m+\033[0m");
+            else
+                putchar('+');
         else if (cp_stp[c] == '~')
-            printf("\033[1;35m~\033[0m");
+            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
+                printf("\033[1;35m~\033[0m");
+            else
+                putchar('~');
         else if (cp_stp[c] == '!')
-            printf("\033[1;31m!\033[0m");
-        else if (cp_stp[c] == '=') {
+            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
+                printf("\033[1;31m!\033[0m");
+            else
+                putchar('!');
+        else if (cp_stp[c] == '=')
             if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
                 printf("\033[1;35m=\033[0m");
             else
-                putchar('R');
-        } else if (cp_stp[c] == '%') {
-            if (cp_stp[c+1] == 'z') {
+                putchar('=');
+        else if (cp_stp[c] == '%') {
+            if (cp_stp[c+1] == 'd') {
+                int32_t cp_val = va_arg(cp_args, int32_t);
+
+                printf("%d", cp_val);
+
+                c += 1;
+            } else if (cp_stp[c+1] == 's') {
+                sbyte_t cp_val = va_arg(cp_args, sbyte_t);
+
+                printf("%s", cp_val);
+
+                c += 1;
+            } else if (cp_stp[c+1] == 'z') {
                 if (cp_stp[c+2] == 'u') {
                     size_t cp_val = va_arg(cp_args, size_t);
 
@@ -101,15 +126,14 @@ static void cprintf(const char* cp_stp, ...)
 
                 c += 1;
             } else if (cp_stp[c+1] == 'l') {
-                c += 1;
-
-                if (cp_stp[c+1] == 'x') {
-                    unsigned long int* cp_val = va_arg(cp_args, void*);
+                if (cp_stp[c+2] == 'x') {
+                    ulong64_t cp_val = va_arg(cp_args, ulong64_t);
 
                     printf("\033[0;32m%lx\033[0m", cp_val);
 
-                    c += 1;
-                }
+                    c += 2;
+                } else
+                    putchar('%');
             } else
                 putchar('%');
         } else
@@ -119,7 +143,7 @@ static void cprintf(const char* cp_stp, ...)
     va_end(cp_args);
 }
 
-static uintptr_t ft_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_size)
+static uintptr_t fcv_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_size)
 {
     for (int j = 0; j < c_info->dlpi_phnum; j++) {
         if (c_info->dlpi_phdr[j].p_type == PT_LOAD && (c_info->dlpi_phdr[j].p_flags & PF_X)) {
@@ -135,7 +159,7 @@ static uintptr_t ft_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_si
     return 0x0;
 }
 
-static uintptr_t gt_base_a(uintptr_t start_a)
+static uintptr_t fcv_gt_base_a(uintptr_t start_a)
 {
     FILE* maps;
 
@@ -152,6 +176,7 @@ static uintptr_t gt_base_a(uintptr_t start_a)
 
     while (fgets(line, sizeof(line), maps)) {
         // m_: mapping/mappings
+
         uintptr_t m_start_a = 0x0;
         uintptr_t m_end_a   = 0x0;
         sbyte_t   m_perms[5];
@@ -170,16 +195,16 @@ static uintptr_t gt_base_a(uintptr_t start_a)
     return base_a; 
 }
 
-static section_t find_text(void)
+static section_t fc_virtual(void)
 {
     section_t section = {0x0, 0x0, 0x0};
 
-    uintptr_t f_start_a = dl_iterate_phdr(ft_gt_start_a_callback, NULL);
+    uintptr_t f_start_a = dl_iterate_phdr(fcv_gt_start_a_callback, NULL);
 
     if ((void*)f_start_a && (uintptr_t)f_start_a != NULL)
         section.start_a = (uintptr_t)f_start_a;
 
-    uintptr_t f_base_a = (uintptr_t)gt_base_a(f_start_a);
+    uintptr_t f_base_a = (uintptr_t)fcv_gt_base_a(f_start_a);
 
     if ((uintptr_t)f_base_a)
         section.base_a = (uintptr_t)f_base_a;
@@ -190,21 +215,37 @@ static section_t find_text(void)
     return section;
 }
 
-static void* crawl_text(void) {
-    found_s = find_text();
+static int32_t sc_virtual(byte_t* fs_virtual, section_t fs_physical)
+{
+    for (int i = 0; i < fs_physical.size; i++) {
+        if (fs_virtual[i] == ((byte_t*)fs_physical.start_a)[i]) continue;
+        else return 1;
+    }
+
+    return 0;
+}
+
+static void* cc_virtual(void) {
+    fs_virtual = fc_virtual();
 
     // debug
-    cprintf("[=] %p\n"   , found_s.start_a);
-    cprintf("[=] %p\n"   , found_s.base_a);
-    cprintf("[=] 0x%lx\n", found_s.size);
+    cprintf("[+] successfully found virtual section (code)\n\0");
+    cprintf("[=] s %p\n\0"   , fs_virtual.start_a);
+    cprintf("[=] b %p\n\0"   , fs_virtual.base_a);
+    cprintf("[=] z 0x%lx\n\0", fs_virtual.size);
 
-    if (!found_s.start_a || !found_s.base_a || found_s.size == (size_t)0x0)
+    if (!fs_virtual.start_a ||
+        !fs_virtual.base_a  ||
+         fs_virtual.size    == (size_t)0x0
+    )
         return NULL;
 
-    void* mapped_s = (uintptr_t*)mmap(
-        NULL, found_s.size,
+    fs_virtual.size_mk = (size_t)(fs_virtual.size - (sbyte_t)0x1);
+
+    mapped_s = (uintptr_t*)mmap(
+        NULL, fs_virtual.size_mk,
         PROT_READ   | PROT_WRITE | PROT_EXEC,
-        MAP_PRIVATE | MAP_ANONYMOUS, 
+        MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0
     );
@@ -212,44 +253,27 @@ static void* crawl_text(void) {
     if (mapped_s == MAP_FAILED)
         return NULL;
 
-    memcpy(mapped_s, found_s.start_a, found_s.size);
+    memcpy(mapped_s, fs_virtual.start_a, fs_virtual.size);
 
     return mapped_s;
 }
 
-// TODO
-static void sc_physical(void)
-{
-
-}
-
-// TODO
 static void wt_back(void)
 {
-
+    // era pra abrir o ELF no disco e começar a escrever a mapped_s no disco a partir do 0x401000 (do ELF), mas dá busy error e eu nao sei evadir
 }
 
-static int32_t sc_virtual(byte_t* section, section_t og_section)
+static void modifier(void)
 {
-    for (int i = 0; i < og_section.size; i++) {
-        if (section[i] == ((byte_t*)og_section.start_a)[i]) continue;
-        else return 1;
-    }
+    mapped_s = (byte_t*)cc_virtual();
 
-    return 0;
-}
+    if (sc_virtual(mapped_s, fs_virtual) == 0x1)
+        return;
 
-static void modifier(void) 
-{ 
-    byte_t* mapped_s = (byte_t*)crawl_text();
+    byte_t* cursor = mapped_s + ((int64_t)fs_virtual.size - (sbyte_t)8);
 
-    if (sc_virtual(mapped_s, found_s) == 0x1)
-        return NULL;
-
-    byte_t* cursor = mapped_s + ((int64_t)found_s.size - (sbyte_t)9); // 9 and not 8 because the last byte is inaccessible
-    
-    for (int i = 0; i < found_s.size; i++) {
-        cursor[i] == 0x90; // 8 NOPs
+    for (int i = 0; i < 8; i++) {
+        cursor[i] = 0x90; // 8 NOPs
     }
 
     wt_back();
