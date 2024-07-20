@@ -60,6 +60,11 @@ static pid_t      pid          = 0x0;
 static section_t  fs_virtual   = {0x0, 0x0, 0x0};
 static void*      mapped_s     = NULL;
 
+static void bypassed(void)
+{
+    puts("Hum?");
+}
+
 static void cprintf(const char* cp_stp, ...)
 {
     va_list cp_args;
@@ -258,9 +263,22 @@ static void* cc_virtual(void) {
     return mapped_s;
 }
 
-static void wt_back(void)
+static int32_t wt_back(void)
 {
-    // era pra abrir o ELF no disco e começar a escrever a mapped_s no disco a partir do 0x401000 (do ELF), mas dá busy error e eu nao sei evadir
+    if (!mapped_s || !fs_virtual.start_a || !fs_virtual.size)
+        return;
+
+    if (mprotect(fs_virtual.start_a, fs_virtual.size, PROT_READ | PROT_WRITE | PROT_EXEC) == -1)
+        return 0x1;
+
+    memcpy(fs_virtual.start_a, mapped_s, fs_virtual.size);
+
+    if (msync(fs_virtual.start_a, fs_virtual.size, MS_SYNC) == -1)
+        return 0x1;
+
+    cprintf("[+] ok?\n\0");
+
+    exit(0);
 }
 
 static void modifier(void)
