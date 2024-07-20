@@ -1,151 +1,16 @@
-/* abbreviations
-- _a: address
-- _s: section
-- _t: type
-- f_: found
-
-- fc_virtual: find code virtual
-- fs_virtual: found section virtual
-
-- fs_physical: found section physical
-
-- cc_virtual: crawl code virtual
-
-- vt: virtual
-- ps: phisical
-
-- fcv: find code virtual (ABV of helpers)
-
-- sc: sanity check
-- mk: mask
-- gt: get
-- wt: write
-*/
-
-#define _GNU_SOURCE
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdarg.h>
-
-#include <limits.h>
-#include <inttypes.h>
-
-#include <sys/mman.h>
-#include <sys/auxv.h>
-#include <unistd.h>
-#include <dlfcn.h>
-#include <link.h>
-#include <elf.h>
-
-// typedefs
-typedef unsigned char byte_t;
-typedef signed   char sbyte_t;
-typedef unsigned long ulong64_t;
-
-typedef struct {
-    void*    start_a;
-    void*    base_a;
-    size_t*  size;
-    size_t*  size_mk;
-} section_t;
-
-// protytpes
-int main(void);
+#include "include/headers/main.h"
 
 // global vars
-static pid_t      pid          = 0x0;
-static section_t  fs_virtual   = {0x0, 0x0, 0x0};
-static void*      mapped_s     = NULL;
+static pid_t       pid         =  0x0;
+static section_t   fs_virtual  =  {0x0, 0x0, 0x0};
+static void*       mapped_s    =  NULL;
 
-static void bypassed(void)
+static void ohyes(void)
 {
-    puts("Hum?");
-}
+    puts("...");
 
-static void cprintf(const char* cp_stp, ...)
-{
-    va_list cp_args;
-    va_start(cp_args, cp_stp);
-    
-    for (int c = 0; cp_stp[c] != '\0'; c++) {
-        if (cp_stp[c] == '*')
-            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[1;33m*\033[0m");
-            else
-                putchar('*');
-        else if (cp_stp[c] == '+')
-            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[1;36m+\033[0m");
-            else
-                putchar('+');
-        else if (cp_stp[c] == '~')
-            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[1;35m~\033[0m");
-            else
-                putchar('~');
-        else if (cp_stp[c] == '!')
-            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[1;31m!\033[0m");
-            else
-                putchar('!');
-        else if (cp_stp[c] == '=')
-            if (cp_stp[c-1] == '[' && cp_stp[c+1] == ']')
-                printf("\033[1;35m=\033[0m");
-            else
-                putchar('=');
-        else if (cp_stp[c] == '%') {
-            if (cp_stp[c+1] == 'd') {
-                int32_t cp_val = va_arg(cp_args, int32_t);
-
-                printf("%d", cp_val);
-
-                c += 1;
-            } else if (cp_stp[c+1] == 's') {
-                sbyte_t cp_val = va_arg(cp_args, sbyte_t);
-
-                printf("%s", cp_val);
-
-                c += 1;
-            } else if (cp_stp[c+1] == 'z') {
-                if (cp_stp[c+2] == 'u') {
-                    size_t cp_val = va_arg(cp_args, size_t);
-
-                    printf("%zu", cp_val);
-
-                    c += 2;
-                } else if (cp_stp[c+2] == 'd') {
-                    ssize_t cp_val = va_arg(cp_args, ssize_t);
-
-                    printf("%zd", cp_val);
-
-                    c += 2;
-                } else
-                    putchar('%');
-            } else if (cp_stp[c+1] == 'p') {
-                void* cp_val = va_arg(cp_args, void*);
-
-                printf("\033[0;32m%p\033[0m", cp_val);
-
-                c += 1;
-            } else if (cp_stp[c+1] == 'l') {
-                if (cp_stp[c+2] == 'x') {
-                    ulong64_t cp_val = va_arg(cp_args, ulong64_t);
-
-                    printf("\033[0;32m%lx\033[0m", cp_val);
-
-                    c += 2;
-                } else
-                    putchar('%');
-            } else
-                putchar('%');
-        } else
-            putchar(cp_stp[c]);
-    }
-    
-    va_end(cp_args);
+    while (1);
+    // trunk
 }
 
 static uintptr_t fcv_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_size)
@@ -197,7 +62,7 @@ static uintptr_t fcv_gt_base_a(uintptr_t start_a)
 
     fclose(maps);
 
-    return base_a; 
+    return base_a;
 }
 
 static section_t fc_virtual(void)
@@ -233,8 +98,7 @@ static int32_t sc_virtual(byte_t* fs_virtual, section_t fs_physical)
 static void* cc_virtual(void) {
     fs_virtual = fc_virtual();
 
-    // debug
-    cprintf("[+] successfully found virtual section (code)\n\0");
+    cprintf("[+] found virtual section (code)\n\0");
     cprintf("[=] s %p\n\0"   , fs_virtual.start_a);
     cprintf("[=] b %p\n\0"   , fs_virtual.base_a);
     cprintf("[=] z 0x%lx\n\0", fs_virtual.size);
@@ -273,31 +137,44 @@ static int32_t wt_back(void)
 
     memcpy(fs_virtual.start_a, mapped_s, fs_virtual.size);
 
+    cprintf("[*] wrote virtual data to physical section, initializing sync\n\0");
+
     if (msync(fs_virtual.start_a, fs_virtual.size, MS_SYNC) == -1)
         return 0x1;
 
-    cprintf("[+] ok?\n\0");
+    cprintf("[+] synchronized to disk\n\0");
 
-    exit(0);
+    cprintf("[~] see you next run\n\0");
+
+    ohyes();
 }
 
 static void modifier(void)
 {
     mapped_s = (byte_t*)cc_virtual();
 
-    if (sc_virtual(mapped_s, fs_virtual) == 0x1)
+    const int32_t sc_virtual_ret_code = sc_virtual(mapped_s, fs_virtual);
+    cprintf("[+] virtual section sanity check returned with code %lx\n\0", sc_virtual_ret_code);
+
+    if (sc_virtual_ret_code == 0x1)
         return;
+
+    cprintf("[+] reached final lap\n\0");
 
     byte_t* cursor = mapped_s + ((int64_t)fs_virtual.size - (sbyte_t)8);
 
+    cprintf("[*] modifying virtual section\n\0");
+
     for (int i = 0; i < 8; i++) {
-        cursor[i] = 0x90; // 8 NOPs
+        cursor[i] = 0x90; // simple nop sleed
     }
+
+    cprintf("[+] success, writebacking to disk's ELF\n\0");
 
     wt_back();
 }
 
-int main(void)
+int main(int argc, const char argv[])
 {
     pid = getpid();
 
