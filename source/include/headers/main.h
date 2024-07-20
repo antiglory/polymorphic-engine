@@ -1,7 +1,7 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-/* abbreviations
+/* abbreviations used
 - _a: address
 - _s: section
 - _t: type
@@ -20,6 +20,7 @@
 - fcv: find code virtual (ABV of helpers)
 
 - sc: sanity check
+
 - mk: mask
 - gt: get
 - wt: write
