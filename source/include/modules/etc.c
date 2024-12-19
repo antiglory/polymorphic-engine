@@ -52,13 +52,16 @@ void cprintf(const char* cp_stp, ...)
             }
             else if (cp_stp[c+1] == 'z')
             {
-                if (cp_stp[c+2] == 'u') {
+                if (cp_stp[c+2] == 'u')
+                {
                     size_t cp_val = va_arg(cp_args, size_t);
 
                     printf("%zu", cp_val);
 
                     c += 2;
-                } else if (cp_stp[c+2] == 'd') {
+                }
+                else if (cp_stp[c+2] == 'd')
+                {
                     ssize_t cp_val = va_arg(cp_args, ssize_t);
 
                     printf("%zd", cp_val);
