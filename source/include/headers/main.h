@@ -1,7 +1,7 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-/* abbreviations used
+/* abbreviations
 - _a: address
 - _s: section
 - _t: type
@@ -60,7 +60,7 @@ typedef struct {
     size_t*  size_mk;
 } section_t;
 
-// protytpes
+// prototypes
 int main(int argc, const char argv[]);
 
 #endif
