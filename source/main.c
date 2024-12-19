@@ -15,14 +15,15 @@ static void ohyes(void)
 
 static uintptr_t fcv_gt_start_a_callback(struct dl_phdr_info* c_info, size_t c_size)
 {
-    for (int j = 0; j < c_info->dlpi_phnum; j++) {
-        if (c_info->dlpi_phdr[j].p_type == PT_LOAD && (c_info->dlpi_phdr[j].p_flags & PF_X)) {
+    for (int j = 0; j < c_info->dlpi_phnum; j++)
+    {
+        if (c_info->dlpi_phdr[j].p_type == PT_LOAD && (c_info->dlpi_phdr[j].p_flags & PF_X))
+        {
             uintptr_t start_a = c_info->dlpi_addr + c_info->dlpi_phdr[j].p_vaddr;
             uintptr_t base_a = start_a + c_info->dlpi_phdr[j].p_memsz;
 
-            if ((uintptr_t)&main >= start_a && (uintptr_t)&main < base_a) {
+            if ((uintptr_t)&main >= start_a && (uintptr_t)&main < base_a)
                 if ((void*)start_a) return start_a;
-            }
         }
     }
 
@@ -44,8 +45,9 @@ static uintptr_t fcv_gt_base_a(uintptr_t start_a)
 
     uintptr_t base_a = 0x0;
 
-    while (fgets(line, sizeof(line), maps)) {
-        // m_: mapping
+    while (fgets(line, sizeof(line), maps))
+    {
+        // m_: mapping/mappings
 
         uintptr_t m_start_a = 0x0;
         uintptr_t m_end_a   = 0x0;
@@ -54,7 +56,8 @@ static uintptr_t fcv_gt_base_a(uintptr_t start_a)
         if (sscanf(line, "%lx-%lx %4s", &m_start_a, &m_end_a, m_perms) != 3)
             continue;
 
-        if (strchr(m_perms, 'x') && start_a >= m_start_a && start_a < m_end_a) {
+        if (strchr(m_perms, 'x') && start_a >= m_start_a && start_a < m_end_a)
+        {
             base_a = m_end_a;
             break;
         }
@@ -87,7 +90,8 @@ static section_t fc_virtual(void)
 
 static int32_t sc_virtual(byte_t* fs_virtual, section_t fs_physical)
 {
-    for (int i = 0; i < fs_physical.size; i++) {
+    for (int i = 0; i < fs_physical.size; i++)
+    {
         if (fs_virtual[i] == ((byte_t*)fs_physical.start_a)[i]) continue;
         else return 1;
     }
@@ -95,7 +99,8 @@ static int32_t sc_virtual(byte_t* fs_virtual, section_t fs_physical)
     return 0;
 }
 
-static void* cc_virtual(void) {
+static void* cc_virtual(void)
+{
     fs_virtual = fc_virtual();
 
     cprintf("[+] found virtual section (code)\n\0");
@@ -103,24 +108,24 @@ static void* cc_virtual(void) {
     cprintf("[=] b %p\n\0"   , fs_virtual.base_a);
     cprintf("[=] z 0x%lx\n\0", fs_virtual.size);
 
-    if (!fs_virtual.start_a ||
+    if (
+        !fs_virtual.start_a ||
         !fs_virtual.base_a  ||
          fs_virtual.size    == (size_t)0x0
-    )
-        return NULL;
+    ) return NULL;
 
     fs_virtual.size_mk = (size_t)(fs_virtual.size - (sbyte_t)0x1);
 
     mapped_s = (uintptr_t*)mmap(
-        NULL, fs_virtual.size_mk,
+        NULL,
+        fs_virtual.size_mk,
         PROT_READ   | PROT_WRITE | PROT_EXEC,
         MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0
     );
 
-    if (mapped_s == MAP_FAILED)
-        return NULL;
+    if (mapped_s == MAP_FAILED) return NULL;
 
     memcpy(mapped_s, fs_virtual.start_a, fs_virtual.size);
 
@@ -129,22 +134,22 @@ static void* cc_virtual(void) {
 
 static int32_t wt_back(void)
 {
-    if (!mapped_s || !fs_virtual.start_a || !fs_virtual.size)
-        return;
+    if (!mapped_s || !fs_virtual.start_a || !fs_virtual.size) return;
 
-    if (mprotect(fs_virtual.start_a, fs_virtual.size, PROT_READ | PROT_WRITE | PROT_EXEC) == -1)
-        return 0x1;
+    if (
+        mprotect(
+            fs_virtual.start_a,
+            fs_virtual.size,
+            PROT_READ | PROT_WRITE | PROT_EXEC
+        ) == -1) return 0x1;
 
     memcpy(fs_virtual.start_a, mapped_s, fs_virtual.size);
 
     cprintf("[*] wrote virtual data to physical section, initializing sync\n\0");
 
-    if (msync(fs_virtual.start_a, fs_virtual.size, MS_SYNC) == -1)
-        return 0x1;
+    if (msync(fs_virtual.start_a, fs_virtual.size, MS_SYNC) == -1) return 0x1;
 
     cprintf("[+] synchronized to disk\n\0");
-
-    cprintf("[~] see you next run\n\0");
 
     ohyes();
 }
@@ -156,8 +161,7 @@ static void modifier(void)
     const int32_t sc_virtual_ret_code = sc_virtual(mapped_s, fs_virtual);
     cprintf("[+] virtual section sanity check returned with code %lx\n\0", sc_virtual_ret_code);
 
-    if (sc_virtual_ret_code == 0x1)
-        return;
+    if (sc_virtual_ret_code == 0x1) return;
 
     cprintf("[+] reached final lap\n\0");
 
@@ -165,7 +169,8 @@ static void modifier(void)
 
     cprintf("[*] modifying virtual section\n\0");
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 8; i++)
+    {
         cursor[i] = 0x90; // simple nop sleed
     }
 
