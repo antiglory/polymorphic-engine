@@ -36,7 +36,7 @@ input -> [#] magenta
 #include <cpuid.h>
 
 #include "include/entropy.c"
-#include "include/winnit.h"
+#include "include/winnt.h"
 
 typedef int file_t;
 
@@ -156,7 +156,7 @@ binary_format_t detect_binary_format(file_t file_descriptor)
 
 uintptr_t* find_text(file_t file_descriptor, binary_format_t binary_format)
 {
-    if (binary_format == BIN_ELF) return NULL;
+    if (binary_format == BIN_ELF) return NULL; // TODO
     else if (binary_format == BIN_PE)
     {
         /*
@@ -234,11 +234,10 @@ uintptr_t* find_text(file_t file_descriptor, binary_format_t binary_format)
             IMAGE_SECTION_HEADER section;
             off_t section_offset = section_headers_offset + (i * sizeof(IMAGE_SECTION_HEADER));
             
-            if (safe_read(file_descriptor, &section, sizeof(IMAGE_SECTION_HEADER), section_offset, file_size) < 0) {
+            if (safe_read(file_descriptor, &section, sizeof(IMAGE_SECTION_HEADER), section_offset, file_size) < 0)
                 continue;
-            }
             
-            // Check if this is the .text section
+            // check if this is the .text section
             if (strncmp((char*)section.Name, ".text", 5) == 0 ||
                (section.Characteristics & IMAGE_SCN_CNT_CODE) != 0
             ) {
@@ -246,9 +245,9 @@ uintptr_t* find_text(file_t file_descriptor, binary_format_t binary_format)
                 uintptr_t* result = (uintptr_t*)malloc(2 * sizeof(uintptr_t));
                 if (result == NULL) { close(file_descriptor); return NULL; }
                 
-                // Return the physical file offset and size
-                result[0] = section.PointerToRawData;  // Physical offset in file
-                result[1] = section.SizeOfRawData;     // Physical size in file
+                // return the physical file offset and size
+                result[0] = section.PointerToRawData;  // physical offset in file
+                result[1] = section.SizeOfRawData;     // physical size in file
                 
                 close(file_descriptor);
 
@@ -257,7 +256,6 @@ uintptr_t* find_text(file_t file_descriptor, binary_format_t binary_format)
         }
         
         close(file_descriptor);
-
         return NULL;
     } else // unreachable
     {
@@ -299,7 +297,7 @@ size_t find_text_size(file_t file_descriptor)
         {
             text_size = section_header.SizeOfRawData;
 
-            printf("[+] found .text with virtual size = %u, raw size = %u\n", section_header.Misc.VirtualSize, section_header.SizeOfRawData);
+            printf("[+] found .text, raw size = %u\n", section_header.SizeOfRawData);
 
             break;
         }
@@ -307,9 +305,7 @@ size_t find_text_size(file_t file_descriptor)
     
     if (text_size == 0)
         fprintf(stderr, "[!] .text section not found\n");
-    
 cleanup:
-    // Restaura posição original do arquivo
     lseek(file_descriptor, current_pos, SEEK_SET);
     return text_size;
 }
@@ -367,7 +363,7 @@ typedef struct
 {
     file_t file_descriptor;
     binary_format_t binary_format;
-    bool binary_arch; // 0 -> 32, 1 -> 64
+    bool binary_arch; // TODO 0 -> 32, 1 -> 64
     uintptr_t* text_start;
     size_t text_size;
 } binary_t;
