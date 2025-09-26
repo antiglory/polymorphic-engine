@@ -1,0 +1,1 @@
+unsigned char* get_old_hash();
