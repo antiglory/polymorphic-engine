@@ -1,19 +1,14 @@
 // polymorphic engine
 // g++ -mrdseed -lssl -lcrypto -O3 -Wall -Wextra -o output/mutate mutate.cpp && ./output/mutate output/sync.exe
 
-// TODO também vou implementar pra mutar instrução por instrução equivalente - e.q: NOP -> XCHG eax, eax
+// behavior (fix it by TODO 1): after injecting new instructions, all .text layout after that injection point is shifted by 1
+
+// TODO implementar pra ou adicionar e remover instrução sem mudar o tamanho da .text
+// TODO também vou implementar pra mutar instrução por instrução equivalente - e.q: NOP -> XCHG eax, eax - mas botar algoritmo pra sempre tentar não mudar muito o tamanho da .text
 // TODO find_architecture() e adaptar todas as funcoes pra parsear a arquitetura (32 ou 64)
 // TODO find_ghost_code() e find_routine_starts()
 
-/*
-erro critico/pra aborto -> [!] em vermelho
-informação -> [+] em azul
-valor -> [*] em azul
-atenção -> [#] em amarelo
-input -> [#] magenta
-*/
-
-// not safe with non-pie binaries -> injecting/removing/changing size of instructions may harm static calculations of other objects made by the binary compiler
+// not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler
 
 // abre o binario (open_binary, detect_binary_format) -> seta a text (find_text, find_text_size) -> procura ghost code nela (find_ghost_code) -> se sim -> remove os old (remove_old_code) -> detecta começos e fim de rotina (find_routine_starts, find_routine_end) -> aleatoriza se vai colocar em lugar aleatorio na rotina ou colocar nos começos ou nos finais (randomize_code_position) -> coloca (new_code)
 // abre o binario (open_binary, detect_binary_format) -> seta a text (find_text. find_text_size) -> procura ghost code nela (find_ghost_code) -> se não -> detecta começos e fim de rotina (find_routine_starts, find_routine_end) -> aleatoriza se vai colocar em lugar aleatorio na rotina ou colocar nos começos ou nos finais (randomize_code_position) -> coloca (reorder_code)
@@ -117,7 +112,7 @@ file_t open_binary(const char* path)
     {
         char user_input[32];
 
-        printf("[#] non-PIE-like binary detected, mutate anyway? "); 
+        printf("[#] PIE-like binary detected, mutate anyway? "); 
 
         fgets(user_input, sizeof(user_input), stdin);
         user_input[strcspn(user_input, "\n")] = 0;
@@ -313,48 +308,12 @@ cleanup:
 void find_routine_start();
 void find_routine_end();
 
-void find_ghost_code(/*text_start*/)
+void find_ghost_code(/*text_start, text_size*/)
 {
     // recebe o offset que começa a .text no arquivo fisico já aberto
     // itera sobre todos os opcodes buscando por patterns de ghost instruction conhecidos pela engine
     // quando encontrar, salva numa estrutura o endereço onde tá esse opcode, o opcode correspondente e salva uma contagem de todos os encontrados
 }
-
-/*
-#define MAX_GHOST_CODE 128
-
-typedef struct
-{
-    uintptr_t* found_nop;
-    uintptr_t* found_mov_eax_eax;
-    uintptr_t* found_mov_esi_esi;
-
-    size_t found_nop_count;
-    size_t found_mov_eax_eax_count;
-    size_t found_mov_esi_esi_count;
-} ghost_code_t;
-
-ghost_code_t find_ghost_code()
-{
-    ghost_code_t ghost_code;
-
-    found_nop = (uintptr_t*)malloc(MAX_GHOST_CODE);
-    found_mov_eax_eax = (uintptr_t*)malloc(MAX_GHOST_CODE);
-    found_mov_esi_esi = (uintptr_t*)malloc(MAX_GHOST_CODE);
-
-    (pseudo) for(each "nop")
-    {
-        ghost_code->found_nop[i] = &(*found_nop);
-        ghost_code->found_nop_count++;
-    }
-    (pseudo) for(each "mov eax, eax")
-    {
-        ghost_code->found_mov_eax_eax[i] = &(*found_mov_eax_eax);
-        ghost_code->found_mov_eax_eax_count++;
-    }
-    (pseudo) for(each "mov esi, esi") { ... }
-}
-*/
 
 void new_code();
 void reorder_code();
@@ -388,20 +347,22 @@ int32_t main(const int argc, const char* argv[])
     if (!binary->text_start) { close(binary->file_descriptor); return 1; }
 
     printf("[*] .text is at physical offset <0x%lx>, size <0x%lx>\n", binary->text_start[0], binary->text_start[1]);
-
+    
+    // ...
+    
     /* 
     // idea - pseudocode:
-    routine_starts = all(find_routine_starts());
-    routine_ends = all(find_routine_end());
+    routine_starts = find_routine_starts();
+    routine_ends = find_routine_end();
 
-    found_ghost_code = find_ghost_code(binary->text_start); // struct that holds if ghost code was found and all ghost code found
+    found_ghost_code = find_ghost_code(binary->text_start, binary->text_size); // struct that holds if ghost code was found and all ghost code found
     generated_code_position = randomize_code_position(routine_starts, routine_ends);
 
-    if (found_ghost_code == sim)
+    if (found_ghost_code == yes)
     {
         remove_old_code(binary->text_start);
         reorder_code(routine_starts, routine_ends, generated_code_position);
-    } else if (found_ghost_code == nao)
+    } else if (found_ghost_code == yes)
         new_code(routine_starts, routine_ends, generated_code_position);
     */
 
