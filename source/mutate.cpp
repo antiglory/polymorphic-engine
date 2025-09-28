@@ -329,7 +329,7 @@ typedef struct
 
 int32_t main(const int argc, const char* argv[])
 {
-    if (argc < 1) { printf("[!] usage: ./engine <binary>\n"); return 1; }
+    if (argc < 2) { printf("[!] usage: ./engine <binary>\n"); return 1; }
 
     clock_t start = clock();
 
@@ -376,3 +376,4 @@ int32_t main(const int argc, const char* argv[])
 
     return 0;
 }
+
