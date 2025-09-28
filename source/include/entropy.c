@@ -1,3 +1,5 @@
+// no fallback if rdseed isnt avaliable or isnt supported by the hardware (may be a TODO?)
+
 int32_t is_rdseed_supported(void)
 {
     uint32_t eax, ebx, ecx, edx;
@@ -78,4 +80,5 @@ uint32_t random_minmax(uint32_t min_value, uint32_t max_value)
     uint32_t range = max_value - min_value;
 
     return min_value + random(range);
+
 }
