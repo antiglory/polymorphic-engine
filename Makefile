@@ -1,14 +1,14 @@
-MAIN_FILE = source/main.c
-MAIN_OUTPUT = output/main
+INPUT = source/mutate.cpp
+OUTPUT = output/mutate
 
 all:
-	gcc -g -o $(MAIN_OUTPUT) -fno-stack-protector -z execstack -no-pie -w -ldl -static -lelf $(MAIN_FILE)
+	g++ -mrdseed -lssl -lcrypto -O3 -Wall -Wextra -o $(OUTPUT) $(INPUT)
 
 clean:
-	rm -f $(MAIN_OUTPUT)
+	rm -f $(OUTPUT)
 
 run: $(MAIN_OUTPUT)
-	./$(MAIN_OUTPUT)
+	./$(OUTPUT)
 
 dbg: $(MAIN_OUTPUT)
-	gdb $(MAIN_OUTPUT)
+	gdb $(OUTPUT)
