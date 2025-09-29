@@ -1,11 +1,9 @@
 // polymorphic engine
-// g++ -mrdseed -lssl -lcrypto -O3 -Wall -Wextra -o output/mutate mutate.cpp && ./output/mutate output/sync.exe
 
 // behavior (fix it by TODO 1): after injecting new instructions, all .text layout after that injection point is shifted by 1
 
 // TODO implementar pra ou adicionar e remover instrução sem mudar o tamanho da .text
-// TODO também vou implementar pra mutar instrução por instrução equivalente - e.q: NOP -> XCHG eax, eax - mas botar algoritmo pra sempre tentar não mudar muito o tamanho da .text
-// TODO find_architecture() e adaptar todas as funcoes pra parsear a arquitetura (32 ou 64)
+// TODO implementar pra mutar instrução por instrução equivalente - e.q: NOP -> XCHG eax, eax - mas botar algoritmo pra sempre tentar não mudar muito o tamanho da .text
 // TODO find_ghost_code() e find_routine_starts()
 
 // not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler
@@ -44,55 +42,6 @@ static int32_t safe_read(file_t file_descriptor, void* buffer, size_t count, off
     return 0;
 }
 
-int32_t detect_pie(file_t file_descriptor)
-{
-    /* 
-    0  -> non-PIE like
-    1  -> PIE like
-    -1 -> error
-    */
-
-    IMAGE_DOS_HEADER dos_header;
-    IMAGE_NT_HEADERS64 nt_headers;
-    ssize_t bytes_read;
-    
-    // read DOS header
-    if (lseek(file_descriptor, 0, SEEK_SET) == -1) return -1;
-    
-    bytes_read = read(file_descriptor, &dos_header, sizeof(IMAGE_DOS_HEADER));
-    if (bytes_read != sizeof(IMAGE_DOS_HEADER)) return -1;
-    
-    // verify DOS signature
-    if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return -1;
-    
-    // seek to NT headers
-    if (lseek(file_descriptor, dos_header.e_lfanew, SEEK_SET) == -1) return -1;
-    
-    // read NT headers
-    bytes_read = read(file_descriptor, &nt_headers, sizeof(IMAGE_NT_HEADERS64));
-    if (bytes_read != sizeof(IMAGE_NT_HEADERS64)) return -1;
-    
-    // verify NT signature
-    if (nt_headers.signature != IMAGE_NT_SIGNATURE) return -1; // not a valid PE file
-    
-    // check if its a 32 bit PE
-    if (nt_headers.optional_header.magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-    {
-        IMAGE_NT_HEADERS32 nt_headers32;
-    
-        if (lseek(file_descriptor, dos_header.e_lfanew, SEEK_SET) == -1) return -1;
-        
-        bytes_read = read(file_descriptor, &nt_headers32, sizeof(IMAGE_NT_HEADERS32));
-        if (bytes_read != sizeof(IMAGE_NT_HEADERS32)) return -1;
-        
-        if (!(nt_headers32.optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)) return 1; // non-PIE (DYNAMIC_BASE flag not set)
-    } else if (nt_headers.optional_header.magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-        if (!(nt_headers.optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)) return 1; // non-PIE (DYNAMIC_BASE flag not set)
-    else return -1;
-    
-    return 0; // PIE enabled (DYNAMIC_BASE flag is set)
-}
-
 file_t open_binary(const char* path)
 {
     file_t file_descriptor;
@@ -106,21 +55,7 @@ file_t open_binary(const char* path)
     
     if (fstat(file_descriptor, &file_stat) < 0) { perror("[!] cannot get binary stats"); close(file_descriptor); return -1; }
     if (!S_ISREG(file_stat.st_mode)) { fprintf(stderr, "[!] \"%s\" is not a regular binary\n", path); close(file_descriptor); return -1; }
-    
-    bool non_pie_binary = detect_pie(file_descriptor);
-    if (non_pie_binary != 0)
-    {
-        char user_input[32];
 
-        printf("[#] PIE-like binary detected, mutate anyway? "); 
-
-        fgets(user_input, sizeof(user_input), stdin);
-        user_input[strcspn(user_input, "\n")] = 0;
-
-        if (strcmp(user_input, "y") == 0 || strcmp(user_input, "yes") == 0) goto OPEN_BINARY_ENDOF;
-        else { close(file_descriptor); return -1; }
-    }
-OPEN_BINARY_ENDOF:
     printf("[+] opened \"%s\"\n", path);
     printf("[*] this binary is %ld long\n", file_stat.st_size);
     
@@ -149,114 +84,154 @@ binary_format_t detect_binary_format(file_t file_descriptor)
     return BIN_UNKNOWN;
 }
 
+typedef enum
+{
+    ARCH_UNKNOWN = -1,
+    ARCH_X86,
+    ARCH_X64
+} binary_arch_t;
+
+int32_t detect_pie(file_t file_descriptor, binary_format_t binary_format, binary_arch_t binary_arch)
+{
+    /*
+    0  -> non-PIE like
+    1  -> PIE like
+    -1 -> error
+    */
+
+    if (binary_format == BIN_PE)
+    {
+        IMAGE_DOS_HEADER dos_header;
+        ssize_t bytes_read;
+
+        if (lseek(file_descriptor, 0, SEEK_SET) == -1) return -1;
+
+        bytes_read = read(file_descriptor, &dos_header, sizeof(dos_header));
+        if (bytes_read != sizeof(dos_header)) return -1;
+
+        if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return -1;
+
+        if (lseek(file_descriptor, dos_header.e_lfanew, SEEK_SET) == -1) return -1;
+
+        if (binary_arch == ARCH_X86)
+        {
+            IMAGE_NT_HEADERS32 nt32;
+
+            bytes_read = read(file_descriptor, &nt32, sizeof(nt32));
+
+            if (bytes_read != sizeof(nt32)) return -1;
+            if (nt32.signature != IMAGE_NT_SIGNATURE) return -1;
+            if (!(nt32.optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)) return 0;
+        } else if (binary_arch == ARCH_X64)
+        {
+            IMAGE_NT_HEADERS64 nt64;
+
+            bytes_read = read(file_descriptor, &nt64, sizeof(nt64));
+            
+            if (bytes_read != sizeof(nt64)) return -1;
+            if (nt64.signature != IMAGE_NT_SIGNATURE) return -1;
+            if (!(nt64.optional_header.dll_characteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)) return 0;
+        } else return -1;
+
+        return 1;
+    } else if (binary_format == BIN_ELF) return NULL; // TODO
+}
+
+binary_arch_t detect_pe_arch(file_t file_descriptor)
+{
+    struct stat file_stat;
+    if (fstat(file_descriptor, &file_stat) < 0) return ARCH_UNKNOWN;
+    off_t file_size = file_stat.st_size;
+
+    IMAGE_DOS_HEADER dos_header;
+    if (safe_read(file_descriptor, &dos_header, sizeof(IMAGE_DOS_HEADER), 0, file_size) < 0) return ARCH_UNKNOWN;
+
+    if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return ARCH_UNKNOWN;
+
+    if (dos_header.e_lfanew <= 0 || dos_header.e_lfanew + 4 > file_size) return ARCH_UNKNOWN;
+
+    uint32_t pe_signature;
+
+    if (safe_read(file_descriptor, &pe_signature, sizeof(uint32_t), dos_header.e_lfanew, file_size) < 0) return ARCH_UNKNOWN;
+
+    if (pe_signature != IMAGE_NT_SIGNATURE) return ARCH_UNKNOWN;
+
+    IMAGE_FILE_HEADER file_header;
+    off_t file_header_offset = dos_header.e_lfanew + 4;
+    
+    if (safe_read(file_descriptor, &file_header, sizeof(IMAGE_FILE_HEADER), file_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+
+    uint16_t magic;
+    off_t optional_header_offset = file_header_offset + sizeof(IMAGE_FILE_HEADER);
+
+    if (safe_read(file_descriptor, &magic, sizeof(uint16_t), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+
+    if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+    {
+        IMAGE_OPTIONAL_HEADER32 opt_header;
+        
+        if (safe_read(file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER32), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+
+        return ARCH_X86;
+    }
+    else if (magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    {
+        IMAGE_OPTIONAL_HEADER64 opt_header;
+        
+        if (safe_read(file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER64), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+        
+        return ARCH_X64;
+    }
+
+    return ARCH_UNKNOWN;
+}
+
+binary_arch_t detect_elf_arch(); // TODO
+
 uintptr_t* find_text(file_t file_descriptor, binary_format_t binary_format)
 {
-    if (binary_format == BIN_ELF) return NULL; // TODO
-    else if (binary_format == BIN_PE)
+    if (binary_format == BIN_PE)
     {
-        /*
-        if PE:
-            - PE is basically: DOS header (IMAGE_DOS_HEADER), e_lfanew -> NT headers (IMAGE_NT_HEADERS), IMAGE_FILE_HEADER, IMAGE_OPTIONAL_HEADER, IMAGE_SECTION_HEADER, IMAGE_DATA_DIRECTORY
-            - there isnt this headers in linux; i can set the structures myself (or copy from winnt.h). needed fields:
-                - jumps to e_lfanew (DWORD) and validates "PE\0\0"
-                - read IMAGE_FILE_HEADER and IMAGE_OPTIONAL_HEADER (to know if it is 32 or 64 bits)
-        */
         struct stat file_stat;
-        
         if (fstat(file_descriptor, &file_stat) < 0) { close(file_descriptor); return NULL; }
-
         off_t file_size = file_stat.st_size;
-        
-        // read DOS header
+
         IMAGE_DOS_HEADER dos_header;
         if (safe_read(file_descriptor, &dos_header, sizeof(IMAGE_DOS_HEADER), 0, file_size) < 0) { close(file_descriptor); return NULL; }
-        
-        // verify DOS signature
-        if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) { close(file_descriptor); return NULL; }
-        
-        // check e_lfanew is within bounds
-        if (dos_header.e_lfanew <= 0 || dos_header.e_lfanew + 4 > file_size) { close(file_descriptor); return NULL; }
-        
-        // read and verify PE signature
-        uint32_t pe_signature;
-        if (safe_read(file_descriptor, &pe_signature, sizeof(uint32_t), dos_header.e_lfanew, file_size) < 0) { close(file_descriptor); return NULL; }
-        
-        if (pe_signature != IMAGE_NT_SIGNATURE) { close(file_descriptor); return NULL; }
-        
-        // read IMAGE_FILE_HEADER
+
         IMAGE_FILE_HEADER file_header;
         off_t file_header_offset = dos_header.e_lfanew + 4;
         if (safe_read(file_descriptor, &file_header, sizeof(IMAGE_FILE_HEADER), file_header_offset, file_size) < 0) { close(file_descriptor); return NULL; }
-        
-        // read magic number to determine 32 vs 64 bit
-        uint16_t magic;
+
         off_t optional_header_offset = file_header_offset + sizeof(IMAGE_FILE_HEADER);
-        if (safe_read(file_descriptor, &magic, sizeof(uint16_t), optional_header_offset, file_size) < 0) { close(file_descriptor); return NULL; }
-        
-        off_t section_headers_offset;
-        
-        if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
-        {
-            // 32-bit PE
-            IMAGE_OPTIONAL_HEADER32 opt_header;
-            if (safe_read(file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER32), optional_header_offset, file_size) < 0)
-            { 
-                close(file_descriptor);
-                return NULL;
-            }
+        off_t section_headers_offset = optional_header_offset + file_header.SizeOfOptionalHeader;
 
-            section_headers_offset = optional_header_offset + file_header.SizeOfOptionalHeader;
-        } else if (magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-        {
-            // 64-bit PE
-            IMAGE_OPTIONAL_HEADER64 opt_header;
-            if (safe_read(file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER64), optional_header_offset, file_size) < 0)
-            {
-                close(file_descriptor);
-                return NULL;
-            }
-
-            section_headers_offset = optional_header_offset + file_header.SizeOfOptionalHeader;
-        } else
-        {
-            close(file_descriptor);
-            return NULL;
-        }
-        
-        // look for .text section in section headers
+        // look for .text section
         for (int32_t i = 0; i < file_header.NumberOfSections; i++)
         {
             IMAGE_SECTION_HEADER section;
             off_t section_offset = section_headers_offset + (i * sizeof(IMAGE_SECTION_HEADER));
-            
+
             if (safe_read(file_descriptor, &section, sizeof(IMAGE_SECTION_HEADER), section_offset, file_size) < 0)
                 continue;
-            
-            // check if this is the .text section
+
             if (strncmp((char*)section.Name, ".text", 5) == 0 ||
-               (section.Characteristics & IMAGE_SCN_CNT_CODE) != 0
-            ) {
-                // allocate memory for return value (physical offset and size)
+            (section.Characteristics & IMAGE_SCN_CNT_CODE) != 0)
+            {
                 uintptr_t* result = (uintptr_t*)malloc(2 * sizeof(uintptr_t));
                 if (result == NULL) { close(file_descriptor); return NULL; }
-                
-                // return the physical file offset and size
-                result[0] = section.PointerToRawData;  // physical offset in file
-                result[1] = section.SizeOfRawData;     // physical size in file
-                
-                close(file_descriptor);
 
+                result[0] = section.PointerToRawData;
+                result[1] = section.SizeOfRawData;
+
+                close(file_descriptor);
                 return result;
             }
         }
-        
+
         close(file_descriptor);
         return NULL;
-    } else // unreachable
-    {
-        close(file_descriptor);
-        return NULL;
-    }
+    } else if (binary_format == BIN_ELF) return NULL; // TODO 
     
     return NULL;
 }
@@ -266,6 +241,7 @@ size_t find_text_size(file_t file_descriptor)
     IMAGE_DOS_HEADER dos_header;
     IMAGE_NT_HEADERS64 nt_headers;
     IMAGE_SECTION_HEADER section_header;
+
     size_t text_size = 0;
     off_t current_pos;
 
@@ -308,7 +284,7 @@ cleanup:
 void find_routine_start();
 void find_routine_end();
 
-void find_ghost_code(/*text_start, text_size*/)
+void find_ghost_code(/*text_start*/)
 {
     // recebe o offset que começa a .text no arquivo fisico já aberto
     // itera sobre todos os opcodes buscando por patterns de ghost instruction conhecidos pela engine
@@ -322,34 +298,54 @@ typedef struct
 {
     file_t file_descriptor;
     binary_format_t binary_format;
-    bool binary_arch; // TODO 0 -> 32, 1 -> 64
+    binary_arch_t binary_arch;
     uintptr_t* text_start;
     size_t text_size;
 } binary_t;
 
 int32_t main(const int argc, const char* argv[])
 {
-    if (argc < 2) { printf("[!] usage: ./engine <binary>\n"); return 1; }
+    if (argc < 2) { printf("[!] usage: ./%s <binary>\n", argv[0]); return -1; }
 
     clock_t start = clock();
 
     binary_t* binary = (binary_t*)malloc(sizeof(binary_t));
-    if (!binary) return 1;
+    if (!binary) return -1;
 
     binary->file_descriptor = open_binary(argv[1]);
-    if (!binary->file_descriptor || binary->file_descriptor == -1) return 1;
+    if (!binary->file_descriptor || binary->file_descriptor == -1) return -1;
     binary->binary_format = detect_binary_format(binary->file_descriptor);
-    if (!binary->binary_format || binary->binary_format == BIN_UNKNOWN) { close(binary->file_descriptor); return 1; }
+    if (!binary->binary_format || binary->binary_format == BIN_UNKNOWN) { close(binary->file_descriptor); return -1; }
 
-    binary->text_size = find_text_size(binary->file_descriptor);
-    if (!binary->text_size) { close(binary->file_descriptor); return 1; }
-    binary->text_start = find_text(binary->file_descriptor, binary->binary_format);
-    if (!binary->text_start) { close(binary->file_descriptor); return 1; }
+    if (binary->binary_format == BIN_PE)
+    {
+        binary->binary_arch = detect_pe_arch(binary->file_descriptor);
+        if (binary->binary_arch == -1) { close(binary->file_descriptor); return -1; }
+        
+        bool pie_binary = detect_pie(binary->file_descriptor, binary->binary_format, binary->binary_arch);
+        if (pie_binary == 1)
+        {
+            char user_input[32];
 
-    printf("[*] .text is at physical offset <0x%lx>, size <0x%lx>\n", binary->text_start[0], binary->text_start[1]);
-    
-    // ...
-    
+            printf("[#] PIE-like binary detected, mutate anyway? "); 
+
+            fgets(user_input, sizeof(user_input), stdin);
+            user_input[strcspn(user_input, "\n")] = 0;
+
+            if (strcmp(user_input, "y") != 0 && strcmp(user_input, "yes") != 0) { close(binary->file_descriptor); return -1; }
+        }
+
+        binary->text_size = find_text_size(binary->file_descriptor);
+        if (!binary->text_size) { close(binary->file_descriptor); return -1; }
+        binary->text_start = find_text(binary->file_descriptor, binary->binary_format);
+        if (!binary->text_start) { close(binary->file_descriptor); return -1; }
+    } else if (binary->binary_format == BIN_ELF)
+    {
+        // TODO
+    }
+
+    printf("[*] .text is at physical offset <0x%lx>, size <0x%lx>\n", binary->text_start[0], binary->text_size);
+
     /* 
     // idea - pseudocode:
     routine_starts = find_routine_starts();
@@ -376,4 +372,3 @@ int32_t main(const int argc, const char* argv[])
 
     return 0;
 }
-
