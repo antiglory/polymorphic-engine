@@ -140,37 +140,10 @@ typedef struct
     
     std::vector<int32_t> pattern_ids;
     uint8_t nops_before;               // NOP sled
-    uint8_t nops_after;                // NOPs depois
+    uint8_t nops_after;
     uint8_t total_size;
-    char* description;
+    const char* description;
 } mutation_possibility;
-
-// group table by size
-typedef struct
-{
-    size_t size;
-    std::vector<int32_t> pattern_ids;
-} size_group;
-
-static std::vector<size_group> build_size_groups(void)
-{
-    std::vector<size_group> groups;
-    
-    for (size_t s = 1; s <= 5; s++)
-    {
-        size_group group;
-        group.size = s;
-        
-        for (size_t p = 0; p < NUM_PATTERNS; p++)
-            if (known_patterns[p].length == s)
-                group.pattern_ids.push_back(known_patterns[p].id);
-        
-        if (!group.pattern_ids.empty())
-            groups.push_back(group);
-    }
-    
-    return groups;
-}
 
 // generate all mutation possibilities for a specific size
 static std::vector<mutation_possibility> generate_possibilities(size_t target_size)
