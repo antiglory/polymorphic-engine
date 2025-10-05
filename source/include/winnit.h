@@ -1,7 +1,7 @@
-#ifndef WINNIT_H
-#define WINNIT_H
+#ifndef WINNT_H
+#define WINNT_H
 
-// PE structure definitions (subset of winnt.h adapted for linux)
+// PE structure definitions (copy of winnt.h)
 #define IMAGE_DOS_SIGNATURE 0x5A4D      // MZ
 #define IMAGE_NT_SIGNATURE  0x00004550  // PE00
 
@@ -144,18 +144,35 @@ typedef struct _IMAGE_SECTION_HEADER
 #define IMAGE_SCN_MEM_EXECUTE            0x20000000
 #define IMAGE_SCN_MEM_READ               0x40000000
 
+// section alignment masks
+#define IMAGE_SCN_ALIGN_MASK             0x00F00000
+#define IMAGE_SCN_ALIGN_1BYTES           0x00100000
+#define IMAGE_SCN_ALIGN_2BYTES           0x00200000
+#define IMAGE_SCN_ALIGN_4BYTES           0x00300000
+#define IMAGE_SCN_ALIGN_8BYTES           0x00400000
+#define IMAGE_SCN_ALIGN_16BYTES          0x00500000
+#define IMAGE_SCN_ALIGN_32BYTES          0x00600000
+#define IMAGE_SCN_ALIGN_64BYTES          0x00700000
+#define IMAGE_SCN_ALIGN_128BYTES         0x00800000
+#define IMAGE_SCN_ALIGN_256BYTES         0x00900000
+#define IMAGE_SCN_ALIGN_512BYTES         0x00A00000
+#define IMAGE_SCN_ALIGN_1024BYTES        0x00B00000
+#define IMAGE_SCN_ALIGN_2048BYTES        0x00C00000
+#define IMAGE_SCN_ALIGN_4096BYTES        0x00D00000
+#define IMAGE_SCN_ALIGN_8192BYTES        0x00E00000
+
 typedef struct _IMAGE_NT_HEADERS32
 {
-    uint32_t signature;
-    IMAGE_FILE_HEADER file_header;              // COFF file header
-    IMAGE_OPTIONAL_HEADER32 optional_header;
+    uint32_t Signature;
+    IMAGE_FILE_HEADER FileHeader;              // COFF file header
+    IMAGE_OPTIONAL_HEADER32 OptionalHeader;
 } IMAGE_NT_HEADERS32;
 
 typedef struct _IMAGE_NT_HEADERS64
 {
-    uint32_t signature;
-    IMAGE_FILE_HEADER file_header;              // COFF file header
-    IMAGE_OPTIONAL_HEADER64 optional_header;
+    uint32_t Signature;
+    IMAGE_FILE_HEADER FileHeader;              // COFF file header
+    IMAGE_OPTIONAL_HEADER64 OptionalHeader;
 } IMAGE_NT_HEADERS64;
 
 #endif
