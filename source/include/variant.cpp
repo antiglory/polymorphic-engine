@@ -1,3 +1,5 @@
+// variant.cpp
+
 typedef struct
 {
     int32_t pattern_id;
@@ -82,7 +84,7 @@ static int32_t add_occurrence(ghost_code_result* result, int32_t pattern_id, uns
     return 1;
 }
 
-void free_ghost_result(ghost_code_result *result)
+static void free_ghost_result(ghost_code_result* result)
 {
     if (result)
     {
@@ -93,7 +95,7 @@ void free_ghost_result(ghost_code_result *result)
     }
 }
 
-ghost_code_result* find_ghost_code(binary_t* binary)
+static ghost_code_result* find_ghost_code(binary_t* binary)
 {
     ghost_code_result* result = (ghost_code_result*)malloc(sizeof(ghost_code_result));
     if (result == NULL) return NULL;
@@ -150,7 +152,7 @@ typedef struct
     std::vector<int32_t> pattern_ids;
 } size_group;
 
-std::vector<size_group> build_size_groups()
+static std::vector<size_group> build_size_groups(void)
 {
     std::vector<size_group> groups;
     
@@ -171,7 +173,7 @@ std::vector<size_group> build_size_groups()
 }
 
 // generate all mutation possibilities for a specific size
-std::vector<mutation_possibility> generate_possibilities(size_t target_size)
+static std::vector<mutation_possibility> generate_possibilities(size_t target_size)
 {
     std::vector<mutation_possibility> possibilities;
     
@@ -274,13 +276,13 @@ std::vector<mutation_possibility> generate_possibilities(size_t target_size)
     return possibilities;
 }
 
-void write_nops(uint8_t* dest, size_t count)
+static void write_nops(uint8_t* dest, size_t count)
 {
     for (size_t i = 0; i < count; i++)
         dest[i] = 0x90;
 }
 
-ghost_pattern* get_pattern_by_id(int32_t pattern_id)
+static ghost_pattern* get_pattern_by_id(int32_t pattern_id)
 {
     for (size_t i = 0; i < NUM_PATTERNS; i++)
         if (known_patterns[i].id == pattern_id) return &known_patterns[i];
@@ -289,7 +291,7 @@ ghost_pattern* get_pattern_by_id(int32_t pattern_id)
 }
 
 // apply the selected mutation
-int32_t apply_mutation(uint8_t* target_address, const mutation_possibility& mutation)
+static int32_t apply_mutation(uint8_t* target_address, const mutation_possibility& mutation)
 {
     uint8_t* write_ptr = target_address;
 
@@ -319,7 +321,7 @@ int32_t apply_mutation(uint8_t* target_address, const mutation_possibility& muta
     return 0;
 }
 
-mutation_possibility select_mutation(const std::vector<mutation_possibility>& possibilities)
+static mutation_possibility select_mutation(const std::vector<mutation_possibility>& possibilities)
 {
     if (possibilities.empty())
     {
@@ -395,7 +397,7 @@ mutation_possibility select_mutation(const std::vector<mutation_possibility>& po
     return result;
 }
 
-void shuffle_possibilities(std::vector<mutation_possibility>& possibilities)
+static void shuffle_possibilities(std::vector<mutation_possibility>& possibilities)
 {
     for (size_t i = possibilities.size() - 1; i > 0; i--)
     {
