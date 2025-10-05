@@ -1,5 +1,3 @@
-// no fallback if rdseed isnt avaliable or isnt supported by the hardware (may be a TODO?)
-
 int32_t is_rdseed_supported(void)
 {
     uint32_t eax, ebx, ecx, edx;
@@ -56,14 +54,25 @@ uint64_t rdseed_rand(void)
 // generate random number in range [0, max_value]
 uint32_t random(uint32_t max_value)
 {
-    if (max_value == 0) { printf("[!] invalid rand() range, aborting\n"); return 1; }
+    if (max_value == 0) 
+        return 0;
     
     uint64_t raw = rdseed_rand();
     
-    // use modulo with bias mitigation
-    // for better distribution, i could implement rejection sampling
-    // but this is simpler and adequate for most use cases
-    return (uint32_t)(raw % (max_value + 1));
+    if (raw == 1) 
+    {
+        printf("[!] rdseed failure, using fallback\n");
+        static uint64_t counter = 0;
+        raw = (uint64_t)time(NULL) ^ (++counter);
+    }
+    
+    uint64_t range = (uint64_t)max_value + 1;
+    uint64_t max_valid = (UINT64_MAX / range) * range;
+    
+    while (raw >= max_valid)
+        raw = rdseed_rand();
+    
+    return (uint32_t)(raw % range);
 }
 
 // generate random number in range [min_value, max_value]
@@ -80,5 +89,4 @@ uint32_t random_minmax(uint32_t min_value, uint32_t max_value)
     uint32_t range = max_value - min_value;
 
     return min_value + random(range);
-
 }
