@@ -1,7 +1,5 @@
 // polymorphic engine
 
-// TODO terminar de adaptar pra C++ oque tiver
-
 // not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler, etc
 
 #include <stdio.h>
@@ -12,12 +10,10 @@
 #include <fcntl.h>
 #include <elf.h>
 #include <unistd.h>
-#include <time.h>
-#include <cpuid.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <openssl/sha.h>
-#include <nlohmann/json.hpp>
+#include <time.h>
 #include <immintrin.h>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +21,8 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <nlohmann/json.hpp>
+#include <cpuid.h>
 
 #include "include/entropy.c"
 #include "include/winnt.h"
@@ -347,6 +345,8 @@ static int32_t find_text(binary_t* binary)
     return -1;
 }
 
+off_t page_size;
+
 /* Load a binary's .text in disk to memory
  * @param binary Pointer to a binary_t struct instance that holds inferred binary data
  * @return uint8_t* (aka unsigned char) Pointer to the start of the loaded code in memory
@@ -360,7 +360,6 @@ static uint8_t* load_text(binary_t* binary)
 
     off_t offset = binary->text_offset;
 
-    off_t page_size = sysconf(_SC_PAGE_SIZE);
     off_t aligned_offset = (offset / page_size) * page_size;
     size_t offset_diff = offset - aligned_offset;
 
@@ -380,31 +379,54 @@ static uint8_t* load_text(binary_t* binary)
     return (uint8_t*)(mapped_addr) + offset_diff;
 }
 
-/* Performs a writeback from memory to disk - Inverse proccess of load_text()
+/* Get binary's mapped .text in-memory info
  * @param binary Pointer to a binary_t struct instance that holds inferred binary data
+ * @param mapped_addr Pointer to the .text mapped address
+ * @param mapped_size Holds the mapping size
+ * @return int32_t (aka int) Return code - success (0) or error (-1)
  */
-static void writeback_text(binary_t* binary)
+static int32_t get_text(binary_t* binary, void* mapped_addr, size_t mapped_size)
 {
     if (binary->file_descriptor < 0 || 
         binary->text_offset == 0 || 
         binary->text_size == 0 ||
         binary->text_start == nullptr
-    ) return;
+    ) return -1;
 
     off_t offset = binary->text_offset;
 
-    off_t page_size = sysconf(_SC_PAGE_SIZE);
     off_t aligned_offset = (offset / page_size) * page_size;
     size_t offset_diff = offset - aligned_offset;
 
-    // Calcula o endereço base do mapeamento (antes do ajuste)
-    void* mapped_addr = (void*)(binary->text_start - offset_diff);
-    size_t mapped_size = binary->text_size + offset_diff;
+    mapped_addr = (void*)(binary->text_start - offset_diff);
+    mapped_size = binary->text_size + offset_diff;
 
-    // Sincroniza as mudanças para o arquivo
+    return 0;
+}
+
+/* Performs a writeback from memory mapped to disk - Inverse proccess of load_text()
+ * @param binary Pointer to a binary_t struct instance that holds inferred binary data
+ */
+static void writeback_text(binary_t* binary)
+{
+    void* mapped_addr = nullptr;
+    size_t mapped_size = 0;
+
+    get_text(binary, mapped_addr, mapped_size);
+
     msync(mapped_addr, mapped_size, MS_SYNC);
+}
 
-    // Desmapeia a região
+/* Frees the binary's mapped .text in memory
+ * @param binary Pointer to a binary_t struct instance that holds inferred binary data
+ */
+static void free_text(binary_t* binary)
+{
+    void* mapped_addr = nullptr;
+    size_t mapped_size = 0;
+
+    get_text(binary, mapped_addr, mapped_size);
+
     munmap(mapped_addr, mapped_size);
 }
 
@@ -441,7 +463,7 @@ static unsigned char* sha256(binary_t* binary)
  * @param input Binarys hash (SHA256_DIGEST_LENGTH bytes)
  * @param output Buffer to string (need to have at least SHA256_DIGEST_LENGTH * 2 + 1 bytes)
  */
-void hash_to_string(const unsigned char* input, char* output)
+static void hash_to_string(const unsigned char* input, char* output)
 {
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
         sprintf(output + (i * 2), "%02x", input[i]);
@@ -461,7 +483,7 @@ static json load_json(const std::string& path)
     if (file.is_open())
         file >> j;
     else
-        j["known_hashes"] = json::array(); // cria estrutura vazia
+        j["known_hashes"] = json::array(); // void structure
 
     return j;
 }
@@ -484,7 +506,7 @@ static void db_add_hash(const std::string& filename, const std::string& new_hash
 {
     json j = load_json(filename);
 
-    // garante que seja array
+    // ensure it is a array
     if (!j.contains("known_hashes") || !j["known_hashes"].is_array())
         j["known_hashes"] = json::array();
 
@@ -679,7 +701,7 @@ static int32_t loop_mutation(binary_t* binary, ghost_code_result* result, const 
         if (db_has_hash(known_hashes_path, str_new_hash))
         {
             printf("[#] hash already in database\n");
-            strcpy(str_old_hash, str_new_hash);
+            strcpy(str_new_hash, str_old_hash);
             continue;
         }
 
@@ -690,6 +712,7 @@ static int32_t loop_mutation(binary_t* binary, ghost_code_result* result, const 
     
 cleanup:
     cleanup_hashes(bin_old_hash, str_old_hash, bin_new_hash, str_new_hash);
+    free_text(binary);
     return ret;
 }
 
@@ -771,6 +794,8 @@ int main(const int argc, const char* argv[])
         perror("[!] failed to open binary\n");
         return -1;
     }
+
+    page_size = sysconf(_SC_PAGE_SIZE);
 
     const char* known_hashes_path = "hashes.json";
 
