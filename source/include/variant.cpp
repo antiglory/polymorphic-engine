@@ -170,7 +170,7 @@ static std::vector<mutation_possibility> generate_possibilities(size_t target_si
     // generate different combinations of NOPs to fill the space
     if (target_size >= 1 && target_size <= 5)
     {
-        mutation_possibility nop_fill;
+        mutation_possibility nop_fill{};
         nop_fill.type = mutation_possibility::PADDING;
         nop_fill.pattern_ids.clear();
         nop_fill.nops_before = target_size;
