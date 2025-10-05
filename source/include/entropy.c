@@ -1,3 +1,5 @@
+// entropy.c
+
 int32_t is_rdseed_supported(void)
 {
     uint32_t eax, ebx, ecx, edx;
