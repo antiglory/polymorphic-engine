@@ -1,14 +1,4 @@
-// polymorphic engine
-
-/*
-erro critico/pra aborto -> [!] em vermelho
-informação -> [+] em azul
-valor -> [*] em azul
-atenção -> [#] em amarelo
-input -> [#] magenta
-*/
-
-// not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler, etc
+// polymorphic engine - mainfile mutate.cpp
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -796,7 +786,7 @@ int32_t process_binary(binary_t* binary, const char* known_hashes_path)
     {
         fprintf(stderr, "[!] unknown binary format, aborting\n");
         goto cleanup;
-    } else if (binary->format == BIN_ELF) return -1; // TODO
+    }
 
     binary->arch = detect_arch(binary);
     if (binary->arch == ARCH_UNKNOWN)
@@ -813,6 +803,13 @@ int32_t process_binary(binary_t* binary, const char* known_hashes_path)
 
         goto cleanup;
     }
+
+    /*
+    if (binary->format == BIN_ELF)
+    {
+        return -1;
+    }
+    */
     
     if (detect_pie(binary) && !confirm_pie())
     {
@@ -863,11 +860,7 @@ int main(const int argc, const char* argv[])
     }
 
     binary->file_descriptor = open_binary(argv[1]);
-    if (binary->file_descriptor == -1)
-    {
-        perror("[!] failed to open binary\n");
-        return -1;
-    }
+    if (binary->file_descriptor == -1) return -1;
 
     binary->file_size = get_file_size(binary);
     if (!binary->file_size)
