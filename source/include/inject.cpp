@@ -20,7 +20,7 @@ static std::vector<cave_location> find_caves(binary_t* binary, size_t min_size)
     size_t cave_size = 0;
     bool in_cave = false;
     
-    for (int32_t offset = 0; offset < binary->text_size; offset++)
+    for (uint32_t offset = 0; offset < binary->text_size; offset++)
     {
         uint8_t byte = binary->text_start[offset];
         
