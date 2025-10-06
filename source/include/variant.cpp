@@ -1,443 +1,225 @@
-// variant.cpp
+// inject.cpp
 
 typedef struct
 {
-    int32_t pattern_id;
-    unsigned char* address;
-} ghost_occurrence;
+    uint8_t* address;
+    off_t offset;
+    size_t size;
+} cave_location;
 
-typedef struct
+/* Finds NOP caves (NOP sleds) in .text
+ * @param binary Pointer to a binary_t struct instance
+ * @param min_size Minimum cave size to consider
+ * @return std::vector<cave_location> Vector containing all found caves
+ */
+static std::vector<cave_location> find_caves(binary_t* binary, size_t min_size)
 {
-    ghost_occurrence* occurrences;
-    int32_t total_occurrences;
-} ghost_code_result;
-
-// pattern 0: xchg rax, rax
-static unsigned char pattern_0[] = {0x48, 0x90};
-
-// pattern 1: LEA with zero displacement
-static unsigned char pattern_1[] = {0x8D, 0x40, 0x00}; // LEA EAX, [EAX+0]
-
-// pattern_2: two-byte NOP (operand-size prefix + NOP) - used to be for alignment, like NOP
-// encoding: 0x66 0x90
-static unsigned char pattern_2[] = {0x66, 0x90}; // NOP (66 prefix + NOP)
-
-// pattern_3: MOV RAX, RAX (64-bit register move) - make REX + mov
-// encoding: 0x48 0x89 0xC0
-static unsigned char pattern_3[] = {0x48, 0x89, 0xC0}; // mov rax, rax
-
-// pattern_4: MOV EAX, EAX (alternative encoding) - equivalent to nop at r32
-// encoding: 0x8B 0xC0
-static unsigned char pattern_4[] = {0x8B, 0xC0}; // mov eax, eax
-
-// pattern_5: MOV EBX, EBX
-// encoding: 0x89 0xDB
-static unsigned char pattern_5[] = {0x89, 0xDB}; // mov ebx, ebx
-
-typedef struct
-{
-    int32_t id;
-    unsigned char* opcodes;
-    size_t length;
-    const char* description;
-} ghost_pattern;
-
-static ghost_pattern known_patterns[] =
-{
-    {0, pattern_0, sizeof(pattern_0), "xchg rax, rax"},
-    {1, pattern_1, sizeof(pattern_1), "lea eax, [eax+0]"},
-    {2, pattern_2, sizeof(pattern_2), "two-byte NOP"},
-    {3, pattern_3, sizeof(pattern_3), "mov eax, eax"},
-    {4, pattern_4, sizeof(pattern_4), "mov eax, eax"},
-    {5, pattern_5, sizeof(pattern_5), "mov ebx, ebx"}
-};
-
-#define NUM_PATTERNS (sizeof(known_patterns) / sizeof(ghost_pattern))
-
-// helper to compare bytes
-static int32_t match_pattern(unsigned char* code, ghost_pattern* pattern, size_t remaining)
-{
-    if (remaining < pattern->length) return 0;
+    std::vector<cave_location> caves;
     
-    for (size_t i = 0; i < pattern->length; i++)
-        if (code[i] != pattern->opcodes[i]) return 0;
-
-    return 1;
-}
-
-static int32_t add_occurrence(ghost_code_result* result, int32_t pattern_id, unsigned char* address)
-{
-    ghost_occurrence* new_occurrences = (ghost_occurrence*)realloc(result->occurrences, (result->total_occurrences + 1) * sizeof(ghost_occurrence));
+    size_t cave_start = 0;
+    size_t cave_size = 0;
+    bool in_cave = false;
     
-    if (new_occurrences == NULL)
+    for (uint32_t offset = 0; offset < binary->text_size; offset++)
     {
-        // TODO
-        return -1;
-    }
-    
-    result->occurrences = new_occurrences;
-
-    result->occurrences[result->total_occurrences].pattern_id = pattern_id;
-    result->occurrences[result->total_occurrences].address = address;
-    result->total_occurrences++;
-    
-    return 1;
-}
-
-static void free_ghost_result(ghost_code_result* result)
-{
-    if (result)
-    {
-        if (result->occurrences)
-            free(result->occurrences);
-
-        free(result);
-    }
-}
-
-static ghost_code_result* find_ghost_code(binary_t* binary)
-{
-    ghost_code_result* result = (ghost_code_result*)malloc(sizeof(ghost_code_result));
-    if (result == NULL) return NULL;
-    
-    result->occurrences = NULL;
-    result->total_occurrences = 0;
-    
-    // iterates over the .text section
-    for (size_t offset = 0; offset < binary->text_size; offset++)
-    {
-        size_t remaining = binary->text_size - offset;
+        uint8_t byte = binary->text_start[offset];
         
-        // verify each known pattern
-        for (size_t p = 0; p < NUM_PATTERNS; p++)
+        // check for NOP (0x90) or multi-byte NOPs (0x66 0x90, etc)
+        if (byte == 0x90)
         {
-            if (match_pattern(&binary->text_start[offset], &known_patterns[p], remaining))
+            if (!in_cave)
             {
-                if (!add_occurrence(result, known_patterns[p].id, &binary->text_start[offset]))
-                {
-                    free_ghost_result(result);
-                    return NULL;
-                }
-                
-                // advances the offset by the pattern size to avoid overlaps
-                offset += known_patterns[p].length - 1;
-                break;
+                cave_start = offset;
+                cave_size = 1;
+                in_cave = true;
             }
+            else
+                cave_size++;
         }
-    }
-    
-    return result;
-}
-
-typedef struct
-{
-    enum mutation_type_t
-    {
-        DIRECT,      // direct substuition (same size)
-        PADDING,     // smaller pattern + NOPs
-        COMBO
-    } type;
-    
-    std::vector<int32_t> pattern_ids;
-    uint8_t nops_before;               // NOP sled
-    uint8_t nops_after;
-    uint8_t total_size;
-    const char* description;
-} mutation_possibility;
-
-// generate all mutation possibilities for a specific size
-static std::vector<mutation_possibility> generate_possibilities(size_t target_size)
-{
-    std::vector<mutation_possibility> possibilities;
-    
-    // 1. DIRECT
-    for (size_t p = 0; p < NUM_PATTERNS; p++)
-    {
-        if (known_patterns[p].length == target_size)
+        else
         {
-            mutation_possibility poss;
-            poss.type = mutation_possibility::DIRECT;
-            poss.pattern_ids.push_back(known_patterns[p].id);
-            poss.nops_before = 0;
-            poss.nops_after = 0;
-            poss.total_size = target_size;
-            
-            possibilities.push_back(poss);
-        }
-    }
-    
-    // 2. PADDING (multiple variations)
-    // generate different combinations of NOPs to fill the space
-    if (target_size >= 1 && target_size <= 5)
-    {
-        mutation_possibility nop_fill{};
-        nop_fill.type = mutation_possibility::PADDING;
-        nop_fill.pattern_ids.clear();
-        nop_fill.nops_before = target_size;
-        nop_fill.nops_after = 0;
-        nop_fill.total_size = target_size;
-        
-        possibilities.push_back(nop_fill);
-    }
-    
-    // 3. PADDING also
-    for (size_t p = 0; p < NUM_PATTERNS; p++)
-    {
-        if (known_patterns[p].length < target_size)
-        {
-            size_t nops_needed = target_size - known_patterns[p].length;
-            
-            // generate ALL possible NOP distributions
-            for (size_t nops_before = 0; nops_before <= nops_needed; nops_before++)
+            if (in_cave && cave_size >= min_size)
             {
-                size_t nops_after = nops_needed - nops_before;
-                
-                mutation_possibility poss;
-                poss.type = mutation_possibility::PADDING;
-                poss.pattern_ids.push_back(known_patterns[p].id);
-                poss.nops_before = nops_before;
-                poss.nops_after = nops_after;
-                poss.total_size = target_size;
-                
-                possibilities.push_back(poss);
+                cave_location loc;
+                loc.address = &binary->text_start[cave_start];
+                loc.offset = cave_start;
+                loc.size = cave_size;
+
+                caves.push_back(loc);
             }
-        }
-    }
-    
-    // 4. COMBO
-    for (size_t p1 = 0; p1 < NUM_PATTERNS; p1++)
-    {
-        for (size_t p2 = 0; p2 < NUM_PATTERNS; p2++)
-        {
-            size_t combined_size = known_patterns[p1].length + known_patterns[p2].length;
             
-            if (combined_size == target_size)
-            {
-                // Encaixe perfeito
-                mutation_possibility poss;
-                poss.type = mutation_possibility::COMBO;
-                poss.pattern_ids.push_back(known_patterns[p1].id);
-                poss.pattern_ids.push_back(known_patterns[p2].id);
-                poss.nops_before = 0;
-                poss.nops_after = 0;
-                poss.total_size = target_size;
-                
-                possibilities.push_back(poss);
-            } else if (combined_size < target_size)
-            {
-                size_t nops_needed = target_size - combined_size;
-                
-                // different distributions: before, middle (between patterns), after
-                for (size_t nops_before = 0; nops_before <= nops_needed; nops_before++)
-                {
-                    size_t nops_after = nops_needed - nops_before;
-                    
-                    mutation_possibility poss;
-                    poss.type = mutation_possibility::COMBO;
-                    poss.pattern_ids.push_back(known_patterns[p1].id);
-                    poss.pattern_ids.push_back(known_patterns[p2].id);
-                    poss.nops_before = nops_before;
-                    poss.nops_after = nops_after;
-                    poss.total_size = target_size;
-                    
-                    possibilities.push_back(poss);
-                }
-            }
+            in_cave = false;
+            cave_size = 0;
         }
     }
     
-    return possibilities;
-}
-
-static void write_nops(uint8_t* dest, size_t count)
-{
-    for (size_t i = 0; i < count; i++)
-        dest[i] = 0x90;
-}
-
-static ghost_pattern* get_pattern_by_id(int32_t pattern_id)
-{
-    for (size_t i = 0; i < NUM_PATTERNS; i++)
-        if (known_patterns[i].id == pattern_id) return &known_patterns[i];
-
-    return nullptr;
-}
-
-// apply the selected mutation
-static int32_t apply_mutation(uint8_t* target_address, const mutation_possibility& mutation)
-{
-    uint8_t* write_ptr = target_address;
-
-    if (mutation.nops_before > 0)
+    // check last cave
+    if (in_cave && cave_size >= min_size)
     {
-        write_nops(write_ptr, mutation.nops_before);
-        write_ptr += mutation.nops_before;
+        cave_location loc;
+        loc.address = &binary->text_start[cave_start];
+        loc.offset = cave_start;
+        loc.size = cave_size;
+        caves.push_back(loc);
     }
     
-    // patterns (or nothing if just NOPs)
-    for (size_t i = 0; i < mutation.pattern_ids.size(); i++)
+    return caves;
+}
+
+/* Stuffs caves with ghost patterns
+ * @param binary Pointer to a binary_t struct instance
+ * @return int32_t Number of patterns injected, or -1 on error
+ */
+static int32_t cave_stuffing(binary_t* binary)
+{
+    printf("[+] searching for NOP caves...\n");
+    
+    // find caves of at least 2 bytes (smallest pattern)
+    std::vector<cave_location> caves = find_caves(binary, 2);
+    
+    if (caves.empty())
+        return 0;
+    
+    printf("[*] found %zu caves\n", caves.size());
+    
+    int32_t stuffed = 0;
+    
+    for (auto& cave : caves)
     {
-        ghost_pattern* pattern = get_pattern_by_id(mutation.pattern_ids[i]);
-        if (!pattern) return -1;
+        // find patterns that fit in this cave
+        std::vector<ghost_pattern*> fitting_patterns;
         
-        memcpy(write_ptr, pattern->opcodes, pattern->length);
-        write_ptr += pattern->length;
-    }
-    
-    // NOPs after
-    if (mutation.nops_after > 0)
-    {
-        write_nops(write_ptr, mutation.nops_after);
-        write_ptr += mutation.nops_after;
-    }
-    
-    return 0;
-}
-
-static mutation_possibility select_mutation(const std::vector<mutation_possibility>& possibilities)
-{
-    if (possibilities.empty())
-    {
-        mutation_possibility fallback;
-        fallback.type = mutation_possibility::DIRECT;
-        fallback.pattern_ids.clear();
-        fallback.nops_before = 0;
-        fallback.nops_after = 0;
-        fallback.total_size = 0;
-        fallback.description = "DIRECT";
-
-        return fallback;
-    }
-    
-    // separate by types
-    std::vector<mutation_possibility> direct_opts;
-    std::vector<mutation_possibility> padding_opts;
-    std::vector<mutation_possibility> combo_opts;
-    
-    for (const auto& poss : possibilities)
-    {
-        switch (poss.type)
+        for (size_t i = 0; i < NUM_PATTERNS; i++)
         {
-            case mutation_possibility::DIRECT:
-                direct_opts.push_back(poss);
-                break;
-            case mutation_possibility::PADDING:
-                padding_opts.push_back(poss);
-                break;
-            case mutation_possibility::COMBO:
-                combo_opts.push_back(poss);
-                break;
+            if (known_patterns[i].length <= cave.size)
+                fitting_patterns.push_back(&known_patterns[i]);
         }
-    }
-    
-    // 25% direct, 40% padding, 35% combo
-    uint32_t type_roll = random(99);
-    
-    std::vector<mutation_possibility>* chosen_pool = nullptr;
-    
-    if (type_roll < 25 && !direct_opts.empty())
-        chosen_pool = &direct_opts;
-    else if (type_roll < 65 && !padding_opts.empty())
-        chosen_pool = &padding_opts;
-    else if (!combo_opts.empty())
-        chosen_pool = &combo_opts;
-    else
-    {
-        // hierarchical fallback
-        if (!padding_opts.empty()) chosen_pool = &padding_opts;
-        else if (!combo_opts.empty()) chosen_pool = &combo_opts;
-        else if (!direct_opts.empty()) chosen_pool = &direct_opts;
-
-        else return possibilities[0];
-    }
-    
-    uint32_t index = random(chosen_pool->size() - 1);
-    mutation_possibility result = (*chosen_pool)[index];
-
-    switch (result.type)
-    {
-        case mutation_possibility::DIRECT:
-            result.description = "DIRECT";
-            break;
-        case mutation_possibility::PADDING:
-            result.description = "PADDING";
-            break;
-        case mutation_possibility::COMBO:
-            result.description = "COMBO";
-            break;
-    }
-
-    return result;
-}
-
-static void shuffle_possibilities(std::vector<mutation_possibility>& possibilities)
-{
-    for (size_t i = possibilities.size() - 1; i > 0; i--)
-    {
-        uint32_t j = random(i);
-        std::swap(possibilities[i], possibilities[j]);
-    }
-}
-
-typedef struct
-{
-    int32_t direct_count;
-    int32_t padding_count;
-    int32_t combo_count;
-    int32_t total_possibilities;
-} mutation_stats;
-
-int32_t mutate(ghost_code_result* result)
-{
-    if (!result || result->total_occurrences == 0) return 0;
-    
-    // chooses only 1 pattern
-    int32_t chosen_index = random(result->total_occurrences - 1);
-    
-    printf("[+] mutating 1 of %d ghost code occurrences (index %d)\n", 
-           result->total_occurrences, chosen_index);
-    
-    ghost_occurrence* occ = &result->occurrences[chosen_index];
-    
-    ghost_pattern* original_pattern = get_pattern_by_id(occ->pattern_id);
-    if (!original_pattern)
-    {
-        printf("[!] invalid pattern id %d\n", occ->pattern_id);
-        return -1;
-    }
-    
-    size_t original_size = original_pattern->length;
-    
-    // generate all possibilities for this pattern
-    std::vector<mutation_possibility> possibilities = generate_possibilities(original_size);
-    
-    printf("[*] generated %zu mutation possibilities for pattern %d <%s> (size: %zu bytes)\n",
-           possibilities.size(), occ->pattern_id, known_patterns[occ->pattern_id].description, original_size
-    );
-    
-    // shuffle to avoid bias
-    shuffle_possibilities(possibilities);
-    
-    mutation_possibility selected = select_mutation(possibilities);
-
-    if (apply_mutation(occ->address, selected) == 0)
-    {
-        printf("[+] mutated pattern %d <%s> at %p -> selected pattern type %d <%s> - %d pattern(s) size, %d for NOP sled, %d NOPs after\n",
-               occ->pattern_id,
-               known_patterns[occ->pattern_id].description,
-               occ->address,
-               selected.type,
-               selected.description,
-               (int)selected.pattern_ids.size(),
-               selected.nops_before,
-               selected.nops_after
-        );
         
+        if (fitting_patterns.empty()) continue;
+        
+        uint32_t idx = random(fitting_patterns.size() - 1);
+        ghost_pattern* pattern = fitting_patterns[idx];
+        
+        // copy pattern to cave
+        memcpy(cave.address, pattern->opcodes, pattern->length);
+        
+        // fill remaining space with NOPs if needed
+        size_t remaining = cave.size - pattern->length;
+        if (remaining > 0)
+            memset(cave.address + pattern->length, 0x90, remaining);
+        
+        printf("[*] stuffed cave at offset 0x%lx (size: %zu) with pattern %d <%s>\n",
+               binary->text_offset + cave.offset, cave.size, pattern->id, pattern->description);
+        
+        stuffed++;
+    }
+    
+    return stuffed;
+}
+
+/* Injects ghost code patterns in NOP caves (cave stuffing)
+ * @param binary Pointer to a binary_t struct instance
+ * @return int32_t Return code - success (0) or error (-1)
+ */
+static int32_t inject(binary_t* binary)
+{
+    printf("[+] starting injection...\n");
+
+    int32_t stuffed = cave_stuffing(binary);
+    
+    if (stuffed > 0)
+    {
+        printf("[+] cave stuffing completed: %d caves stuffed\n", stuffed);
         return 0;
     }
-    else
+    
+    fprintf(stderr, "[!] no caves to stuff -> incompatible binary\n");
+    printf("[+] try building it with avaliable patterns\n");
+    return -1;
+}
+
+/* Performs injection loop
+ * @param binary Pointer to a binary_t struct instance
+ * @param known_hashes_path Pointer to JSON database string buffer filepath
+ * @return int32_t Return code - success (0) or error (-1)
+ */
+static int32_t loop_injection(binary_t* binary, const char* known_hashes_path)
+{
+    unsigned char* bin_old_hash = NULL;
+    char* str_old_hash = NULL;
+    unsigned char* bin_new_hash = NULL;
+    char* str_new_hash = NULL;
+    ghost_code_result* result = NULL;
+
+    int32_t ret = -1;
+
+    if (compute_hash(binary, &bin_old_hash, &str_old_hash) < 0)
+        goto cleanup;
+    
+    printf("[*] original hash: %s\n", str_old_hash);
+    
+    str_new_hash = (char*)malloc(SHA256_DIGEST_LENGTH * 2 + 1);
+    if (!str_new_hash)
     {
-        printf("[!] failed to mutate pattern %d at %p\n", occ->pattern_id, occ->address); // TODO
-        return -1;
+        fprintf(stderr, "[!] malloc failed for new hash string\n");
+        goto cleanup;
     }
+    
+    strcpy(str_new_hash, str_old_hash);
+    
+    for (int32_t i = 0; i < MAX_MUTATION_ATTEMPTS; i++)
+    {
+        if (strcmp(str_old_hash, str_new_hash) != 0)
+        {
+            ret = 0;
+            break;
+        }
+
+        if (i != 0)
+            printf("[+] try %d: injecting more patterns...\n", i);
+
+        if (inject(binary) != 0)
+        {
+            fprintf(stderr, "[!] injection failed - any patterns have been mutated or stuffed\n");
+            goto cleanup;
+        }
+
+        if (result) free(result);
+        result = find_ghost_code(binary);
+        if (!result || result->total_occurrences == 0)
+        {
+            fprintf(stderr, "[!] no patterns found after injection\n");
+            goto cleanup;
+        }
+
+        printf("[*] after injection: found %d patterns\n", result->total_occurrences);
+
+        writeback_text(binary);
+        fsync(binary->file_descriptor);
+
+        binary->file_size = get_file_size(binary);
+
+        free(bin_new_hash);
+        bin_new_hash = NULL;
+
+        if (compute_hash(binary, &bin_new_hash, &str_new_hash) != 0)
+            goto cleanup;
+
+        if (db_has_hash(known_hashes_path, str_new_hash))
+        {
+            printf("[#] hash already in database, injecting again...\n");
+            strcpy(str_old_hash, str_new_hash);
+            continue;
+        }
+
+        db_add_hash(known_hashes_path, str_new_hash);
+        printf("[+] unique hash found -> added to database\n");
+        printf("[*] new hash: %s\n", str_new_hash);
+    }
+    
+cleanup:
+    if (result) free(result);
+    cleanup_hashes(bin_old_hash, str_old_hash, bin_new_hash, str_new_hash);
+    free_text(binary);
+    return ret;
 }
