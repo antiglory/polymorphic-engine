@@ -1,5 +1,9 @@
 // polymorphic engine - mainfile mutate.cpp
 
+// no pattern found -> pattern (max 3) injection by cave stuffing
+
+// not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler, etc
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -26,11 +30,12 @@
 #define USER_INPUT_SIZE 32
 
 #include "include/winnt.h"
-#include "include/entropy.c"
 
 typedef int32_t file_t;
 
 using json = nlohmann::json;
+
+#include "include/entropy.c"
 
 /* Read <count> bytes from a file in disk
  * @param file_descriptor File descriptor to opened binary
@@ -68,9 +73,9 @@ typedef enum
 typedef struct
 {
     file_t file_descriptor;
+    off_t file_size;
     binary_format_t format;
     binary_arch_t arch;
-    off_t file_size;
     off_t text_offset;
     uint8_t* text_start;
     uint32_t text_alignment;    // the alignment are by bits
@@ -231,6 +236,10 @@ static int32_t detect_pie(binary_t* binary)
     return -1;
 }
 
+Elf64_Ehdr ehdr;
+Elf64_Shdr shdr;
+char* shstrtab;
+
 /* Detects the binary's architecture
  * @param binary Pointer to a binary_t struct instance that holds inferred binary data
  * @return binary_arch_t Enum struct to reference the detected architecture - ARCH_X86 (32 bits) or ARCH_X64 (64 bits)
@@ -242,7 +251,7 @@ static binary_arch_t detect_arch(binary_t* binary)
     if (binary->format == BIN_PE)
     {
         IMAGE_DOS_HEADER dos_header;
-        if (safe_read(binary->file_descriptor, &dos_header, sizeof(IMAGE_DOS_HEADER), 0, file_size) < 0) return ARCH_UNKNOWN;
+        if (safe_read(binary->file_descriptor, &dos_header, sizeof(IMAGE_DOS_HEADER), 0, file_size) != 0) return ARCH_UNKNOWN;
 
         if (dos_header.e_magic != IMAGE_DOS_SIGNATURE) return ARCH_UNKNOWN;
 
@@ -250,25 +259,25 @@ static binary_arch_t detect_arch(binary_t* binary)
 
         uint32_t pe_signature;
 
-        if (safe_read(binary->file_descriptor, &pe_signature, sizeof(uint32_t), dos_header.e_lfanew, file_size) < 0) return ARCH_UNKNOWN;
+        if (safe_read(binary->file_descriptor, &pe_signature, sizeof(uint32_t), dos_header.e_lfanew, file_size) != 0) return ARCH_UNKNOWN;
 
         if (pe_signature != IMAGE_NT_SIGNATURE) return ARCH_UNKNOWN;
 
         IMAGE_FILE_HEADER file_header;
         off_t file_header_offset = dos_header.e_lfanew + 4;
         
-        if (safe_read(binary->file_descriptor, &file_header, sizeof(IMAGE_FILE_HEADER), file_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+        if (safe_read(binary->file_descriptor, &file_header, sizeof(IMAGE_FILE_HEADER), file_header_offset, file_size) != 0) return ARCH_UNKNOWN;
 
         uint16_t magic;
         off_t optional_header_offset = file_header_offset + sizeof(IMAGE_FILE_HEADER);
 
-        if (safe_read(binary->file_descriptor, &magic, sizeof(uint16_t), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+        if (safe_read(binary->file_descriptor, &magic, sizeof(uint16_t), optional_header_offset, file_size) != 0) return ARCH_UNKNOWN;
 
         if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
         {
             IMAGE_OPTIONAL_HEADER32 opt_header;
             
-            if (safe_read(binary->file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER32), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+            if (safe_read(binary->file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER32), optional_header_offset, file_size) != 0) return ARCH_UNKNOWN;
 
             return ARCH_X86;
         }
@@ -276,7 +285,7 @@ static binary_arch_t detect_arch(binary_t* binary)
         {
             IMAGE_OPTIONAL_HEADER64 opt_header;
             
-            if (safe_read(binary->file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER64), optional_header_offset, file_size) < 0) return ARCH_UNKNOWN;
+            if (safe_read(binary->file_descriptor, &opt_header, sizeof(IMAGE_OPTIONAL_HEADER64), optional_header_offset, file_size) != 0) return ARCH_UNKNOWN;
             
             return ARCH_X64;
         }
@@ -284,7 +293,28 @@ static binary_arch_t detect_arch(binary_t* binary)
     }
     else if (binary->format == BIN_ELF)
     {
-        return ARCH_UNKNOWN;
+        lseek(binary->file_descriptor, 0, SEEK_SET); // set cursor to the start
+
+        if (read(binary->file_descriptor, &ehdr, sizeof(ehdr)) != sizeof(ehdr))
+            return ARCH_UNKNOWN;
+
+        unsigned char* e_ident = ehdr.e_ident;
+
+        if (e_ident[EI_MAG0] != ELFMAG0 ||
+            e_ident[EI_MAG1] != ELFMAG1 ||
+            e_ident[EI_MAG2] != ELFMAG2 ||
+            e_ident[EI_MAG3] != ELFMAG3
+        ) {
+            fprintf(stderr, "[!] invalid ELF binary\n");
+            return ARCH_UNKNOWN;
+        }
+
+        if (e_ident[EI_CLASS] == ELFCLASS32)
+            return ARCH_X86;
+        else if (e_ident[EI_CLASS] == ELFCLASS64)
+            return ARCH_X64;
+        else
+            return ARCH_UNKNOWN;
     }
 
     return ARCH_UNKNOWN;
@@ -384,7 +414,54 @@ static int32_t find_text(binary_t* binary)
     }
     else if (binary->format == BIN_ELF)
     {
-        // TODO
+        lseek(binary->file_descriptor, ehdr.e_shoff + ehdr.e_shstrndx * sizeof(shdr), SEEK_SET);
+        if (read(binary->file_descriptor, &shdr, sizeof(shdr)) != sizeof(shdr))
+        {
+            fprintf(stderr, "[!] failed to read binary strings, aborting\n");
+            return -1;
+        }
+        
+        shstrtab = (char*)malloc(shdr.sh_size);
+        if (!shstrtab)
+            return -1;
+        
+        lseek(binary->file_descriptor, shdr.sh_offset, SEEK_SET);
+        if (read(binary->file_descriptor, shstrtab, shdr.sh_size) != shdr.sh_size)
+        {
+            fprintf(stderr, "[!] failed to read binary strings table, aborting\n");
+            free(shstrtab);
+            return -1;
+        }
+        
+        // search for .text
+        bool found = false;
+        for (int32_t i = 0; i < ehdr.e_shnum; i++)
+        {
+            lseek(binary->file_descriptor, ehdr.e_shoff + i * sizeof(shdr), SEEK_SET);
+            if (read(binary->file_descriptor, &shdr, sizeof(shdr)) != sizeof(shdr))
+            {
+                fprintf(stderr, "[!] failed to read section %d, aborting\n", i);
+                free(shstrtab);
+                return -1;
+            }
+            
+            if (strcmp(&shstrtab[shdr.sh_name], ".text") == 0)
+            {
+                binary->text_offset = shdr.sh_offset;
+                binary->text_size = shdr.sh_size;
+                found = true;
+
+                break;
+            }
+        }
+        
+        free(shstrtab);
+        
+        if (!found)
+        {
+            fprintf(stderr, "[!] failed to find .text, aborting\n");
+            return -1;
+        }
     }
     else if (binary->format == BIN_UNKNOWN) return -1;
     
@@ -585,14 +662,12 @@ static bool db_has_hash(const std::string& path, const std::string& hash)
     return false;
 }
 
-/* Helper function to ask user
+/* Helper function to ask user yes or no
  * @return bool Result of input request
  */
-static bool confirm_pie(void)
+static bool confirm(void)
 {
     char user_input[USER_INPUT_SIZE];
-    
-    printf("[#] PIE-like binary detected, mutate anyway? ");
     
     if (fgets(user_input, sizeof(user_input), stdin) == NULL) return false;
     
@@ -624,7 +699,7 @@ static int32_t initialize_text(binary_t* binary)
     }
     
     printf("[*] .text is at physical offset <0x%lx>, size <0x%lx>\n", binary->text_offset, binary->text_size);
-    printf("[*] .text is %d bits aligned\n", binary->text_alignment);
+    if (binary->text_alignment != 0) printf("[*] .text is %d bits aligned\n", binary->text_alignment);
     printf("[*] loaded disk -> memory at %p\n", binary->text_start);
     
     return 0;
@@ -771,6 +846,8 @@ cleanup:
     return ret;
 }
 
+#include "include/inject.cpp"
+
 /* Engine main function that mutates a binary
  * @param binary Pointer to a binary_t struct instance that holds inferred binary data
  * @param known_hashes_path Pointer to JSON database string buffer filepath
@@ -787,6 +864,8 @@ int32_t process_binary(binary_t* binary, const char* known_hashes_path)
         fprintf(stderr, "[!] unknown binary format, aborting\n");
         goto cleanup;
     }
+    else if (binary->format == BIN_ELF)
+        shstrtab = NULL;
 
     binary->arch = detect_arch(binary);
     if (binary->arch == ARCH_UNKNOWN)
@@ -803,18 +882,16 @@ int32_t process_binary(binary_t* binary, const char* known_hashes_path)
 
         goto cleanup;
     }
-
-    /*
-    if (binary->format == BIN_ELF)
-    {
-        return -1;
-    }
-    */
     
-    if (detect_pie(binary) && !confirm_pie())
+    if (detect_pie(binary))
     {
-        printf("[!] mutation aborted by user\n");
-        goto cleanup;
+        printf("[#] PIE-like binary detected, mutate anyway? ");
+
+        if (!confirm())
+        {
+            printf("[!] mutation aborted by user\n");
+            goto cleanup;
+        }
     }
     
     printf("[+] current hashing algorithm: sha256\n");
@@ -826,6 +903,20 @@ int32_t process_binary(binary_t* binary, const char* known_hashes_path)
     if (!result)
     {
         fprintf(stderr, "[!] failed to find ghost code patterns, aborting\n");
+        goto cleanup;
+    }
+    if (result->total_occurrences == 0)
+    {
+        fprintf(stderr, "[!] no pattern found\n");
+        printf("[#] do you want to inject new patterns? (THIS MAY BRICK THE BINARY) ");
+
+        if (!confirm())
+        {
+            printf("[!] mutation aborted by user\n");
+            goto cleanup;
+        }
+
+        return_code = loop_injection(binary, known_hashes_path);
         goto cleanup;
     }
     
@@ -840,7 +931,7 @@ cleanup:
 
 int main(const int argc, const char* argv[])
 {
-    if (argc < 1)
+    if (argc < 2 || argc > 3)
     {
         printf("[!] usage: ./%s <binary>", argv[1]);
         return -1;
@@ -858,6 +949,14 @@ int main(const int argc, const char* argv[])
         printf("[!] failed to allocate binary structure\n");
         return -1;
     }
+    binary->file_descriptor = -1;
+    binary->file_size = 0;
+    binary->format = BIN_UNKNOWN;
+    binary->arch = ARCH_UNKNOWN;
+    binary->text_offset = 0x0;
+    binary->text_start = 0x0;
+    binary->text_alignment = 0;
+    binary->text_size = 0;
 
     binary->file_descriptor = open_binary(argv[1]);
     if (binary->file_descriptor == -1) return -1;
@@ -865,7 +964,7 @@ int main(const int argc, const char* argv[])
     binary->file_size = get_file_size(binary);
     if (!binary->file_size)
     {
-        fprintf(stderr, "[!] failed to get binarys size, aborting\n");
+        fprintf(stderr, "[!] failed to get binary size, aborting\n");
         return -1;
     }
 
