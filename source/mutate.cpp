@@ -1,7 +1,6 @@
 // polymorphic engine - mainfile mutate.cpp
 
 // no pattern found -> pattern (max 3) injection by cave stuffing
-
 // not safe with PIE binaries -> injecting/removing/changing size of instructions may harm relative calculations of other objects made by the binary compiler, etc
 
 #include <stdio.h>
@@ -426,7 +425,7 @@ static int32_t find_text(binary_t* binary)
             return -1;
         
         lseek(binary->file_descriptor, shdr.sh_offset, SEEK_SET);
-        if (read(binary->file_descriptor, shstrtab, shdr.sh_size) != shdr.sh_size)
+        if (read(binary->file_descriptor, shstrtab, shdr.sh_size) != (ssize_t)shdr.sh_size)
         {
             fprintf(stderr, "[!] failed to read binary strings table, aborting\n");
             free(shstrtab);
